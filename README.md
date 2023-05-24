@@ -60,7 +60,7 @@ If you use the repository, please cite (see [bibtex](citations.bib)):
 
 - **SITReg: Multi-resolution architecture for symmetric, inverse consistent, and topology preserving image registration using deformation inversion layers**  
 [Joel Honkamaa](https://github.com/honkamj "Joel Honkamaa"), Pekka Marttinen  
-Under review [eprint arXiv:2303.10211](https://arxiv.org/abs/2303.10211 "eprint arXiv:2303.10211")
+Under review ([preprint arXiv:2303.10211](https://arxiv.org/abs/2303.10211 "preprint arXiv:2303.10211"))
 
 ## Acknowledgments
 
