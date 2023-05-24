@@ -1,0 +1,30 @@
+channels:
+  - defaults
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10
+  - pytorch::pytorch-cuda=11.7
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  - pytorch::pytorch=1.13
+  - matplotlib
+  - ipykernel
+  - numpy
+  - scipy
+  - pylint
+  - mypy
+  - cython
+  - pip
+  - scikit-image
+  - tqdm
+  - attrs
+  - gitpython
+  - nbconvert
+  - tabulate
+  - black
+  - absl-py
+  - pip:
+    - nibabel
+    - antspyx
+    - git+https://github.com/deepmind/surface-distance.git

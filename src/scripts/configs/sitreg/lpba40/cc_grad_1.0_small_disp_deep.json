@@ -1,0 +1,141 @@
+{
+    "data": {
+        "module": "lpba40",
+        "config": {
+            "batch_size": 1,
+            "iterate_inference_pairs_in_both_directions": false,
+            "downsampling_factor": [1, 1, 1],
+            "crop": [[11, 10], [20, 5], [0, 21]],
+            "normalize": false,
+            "shift_and_normalize": null,
+            "seed": 123456789,
+            "file_type": "delineation.brain.bfc",
+            "evaluation_mask_file_type": "delineation.structure.label",
+            "training_pairs_per_epoch": 5000,
+            "n_training_cases": null,
+            "metrics": {
+		    	"validate": ["dice", "determinant", "inverse_consistency"],
+		    	"test": ["dice", "hd95", "determinant", "inverse_consistency"]
+		    }
+        }
+    },
+    "application": {
+        "module": "sitreg",
+        "config": {
+            "inference": {
+        		"save_intermediate_mappings_for_levels": null,
+                "do_reverse_inference": true
+        	},
+            "model": {
+                "n_features_per_resolution": [
+                    8,
+                    36,
+                    36,
+                    36,
+                    36,
+                    36
+                ],
+                "n_feature_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "n_transformation_features_per_resolution": [
+                    16,
+                    62,
+                    62,
+                    62,
+                    62,
+                    62
+                ],
+                "n_transformation_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "max_displacements": [
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.15
+                ],
+                "transformation_downsampling_factor": [1.0, 1.0, 1.0],
+                "predict_affine": false,
+                "normalizer": {
+                    "type": "GroupNormalizerFactory",
+                    "args": {
+                        "n_groups": 2
+                    }
+                },
+                "n_input_channels": 1,
+                "voxel_size": [1.0, 1.0, 1.0],
+                "input_shape": [160, 192, 160],
+                "displacement_field_inversion": {
+                    "forward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "MaxElementWiseAbsStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "max_error": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    },
+                    "backward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "RelativeL2ErrorStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "threshold": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    }
+                }
+            },
+            "training": {
+                "n_epochs": 4,
+                "optimizer": {
+                    "learning_rate": 1e-4,
+                    "betas": [0.9, 0.999]
+                },
+                "loss": {
+                    "similarity": [
+                        [
+                            {
+                                "name": "ncc",
+                                "type": "LocalNormalizedCrossCorrelationLoss",
+                                "args": {
+                                    "window_size": 7
+                                }
+                            }
+                        ]
+                    ],
+                    "regularity": [
+                        [
+                            {
+                                "name": "gradient",
+                                "type": "GradientDeformationLoss",
+                                "weight": 1.0
+                            }
+                        ]
+                    ]
+                }
+            }
+        }
+    }
+}
