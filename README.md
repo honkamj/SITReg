@@ -52,7 +52,7 @@ DIVISION should be either "validate" or "test". EPOCHS defines the epochs for wh
 
 ## Deformation inversion layer
 
-If you are only interested in *deformation inversion layer*, a neural network component for inverting deformation fields, see repository [deformation inversion layer](https://github.com/honkamj/deformation_inversion_layer "deformation inversion layer").
+If you are only interested in *deformation inversion layer*, a neural network component for inverting deformation fields, see repository [deformation inversion layer](https://github.com/honkamj/deformation-inversion-layer "deformation inversion layer").
 
 ## Publication
 
