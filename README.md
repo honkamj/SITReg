@@ -66,6 +66,8 @@ Under review ([eprint arXiv:2303.10211](https://arxiv.org/abs/2303.10211 "eprint
 
 Small parts of the repository are rewritten from [NITorch](https://github.com/balbasty/nitorch), [VoxelMorph](https://github.com/voxelmorph/voxelmorph), [TorchIR](https://github.com/BDdeVos/TorchIR), [DeepReg](https://github.com/DeepRegNet/DeepReg), and [SciPy](https://scipy.org/).
 
+Also, [tutorial](http://implicit-layers-tutorial.org/) by Zico Kolter, David Duvenaud, and Matt Johnson was very helpful in implementing the layer.
+
 ## License
 
 SITReg is released under the MIT license.
