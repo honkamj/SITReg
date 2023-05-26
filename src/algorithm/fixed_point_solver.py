@@ -18,9 +18,14 @@ logger = getLogger(__name__)
 
 
 class BaseStopCriterion(IFixedPointStopCriterion):
-    """Base stop criterion which defines min and max iterations"""
+    """Base stop criterion definining min and max number of iterations
+    
+    Args:
+        min_iterations: Minimum number of iterations to use
+        max_iterations: Maximum number of iterations to use
+    """
 
-    def __init__(self, min_iterations: int = 1, max_iterations: int = 50) -> None:
+    def __init__(self, min_iterations: int = 2, max_iterations: int = 50) -> None:
         self._min_iterations = min_iterations
         self._max_iterations = max_iterations
 
@@ -33,7 +38,7 @@ class BaseStopCriterion(IFixedPointStopCriterion):
     def should_stop_after(
         self, previous_iteration: Tensor, current_iteration: Tensor, iteration_to_end: int
     ) -> bool:
-        if iteration_to_end < self._min_iterations:
+        if iteration_to_end + 1 < self._min_iterations:
             return False
         return self._should_stop_after(previous_iteration, current_iteration, iteration_to_end)
 
@@ -123,9 +128,6 @@ class AndersonSolver(IFixedPointSolver):
             device=initial_value.device,
         )
         output_memory = zeros_like(input_memory)
-        if self._stop_criterion.should_stop_before(1):
-            logger.debug("Anderson fixed point iteration stopped after 0 iterations")
-            return output_memory[:, 0].clone()
         input_memory[:, 0], output_memory[:, 0] = (
             initial_value,
             fixed_point_function(initial_value),
@@ -133,8 +135,8 @@ class AndersonSolver(IFixedPointSolver):
         if self._stop_criterion.should_stop_after(
             previous_iteration=input_memory[:, 0],
             current_iteration=output_memory[:, 0],
-            iteration_to_end=1,
-        ) or self._stop_criterion.should_stop_before(2):
+            iteration_to_end=0,
+        ) or self._stop_criterion.should_stop_before(1):
             logger.debug("Anderson fixed point iteration stopped after 1 iteration")
             return output_memory[:, 0].clone()
         input_memory[:, 1], output_memory[:, 1] = (
@@ -144,7 +146,7 @@ class AndersonSolver(IFixedPointSolver):
         if self._stop_criterion.should_stop_after(
             previous_iteration=input_memory[:, 1],
             current_iteration=output_memory[:, 1],
-            iteration_to_end=2,
+            iteration_to_end=1,
         ):
             logger.debug("Anderson fixed point iteration stopped after 2 iterations")
             return output_memory[:, 1].clone()
@@ -164,9 +166,8 @@ class AndersonSolver(IFixedPointSolver):
             device=initial_value.device,
         )
         solving_target[:, 0] = 1
-        index = 1
-        while not self._stop_criterion.should_stop_before(index + 2):
-            index = index + 1
+        index = n_iterations = 2
+        while not self._stop_criterion.should_stop_before(index):
             current_memory_length = min(index, self._arguments.memory_length)
             step_differences = (
                 output_memory[:, :current_memory_length] - input_memory[:, :current_memory_length]
@@ -206,13 +207,15 @@ class AndersonSolver(IFixedPointSolver):
             output_memory[:, index % self._arguments.memory_length] = fixed_point_function(
                 input_memory[:, index % self._arguments.memory_length]
             )
+            n_iterations += 1
             if self._stop_criterion.should_stop_after(
                 previous_iteration=input_memory[:, index % self._arguments.memory_length],
                 current_iteration=output_memory[:, index % self._arguments.memory_length],
-                iteration_to_end=index + 1,
+                iteration_to_end=index,
             ):
                 break
-        logger.debug("Anderson fixed point iteration stopped after %d iterations", index + 1)
+            index = index + 1
+        logger.debug("Anderson fixed point iteration stopped after %d iterations", n_iterations)
         return output_memory[:, index % self._arguments.memory_length].clone()
 
 
@@ -240,12 +243,11 @@ class NaiveSolver(IFixedPointSolver):
     def solve(
         self, fixed_point_function: Callable[[Tensor], Tensor], initial_value: Tensor
     ) -> Tensor:
-        if self._stop_criterion.should_stop_before(0):
-            return initial_value
         output = previous_output = initial_value
-        iteration = 1
+        iteration = n_iterations = 0
         while not self._stop_criterion.should_stop_before(iteration):
             output = fixed_point_function(previous_output)
+            n_iterations += 1
             if self._stop_criterion.should_stop_after(
                 previous_iteration=previous_output,
                 current_iteration=output,
@@ -254,7 +256,7 @@ class NaiveSolver(IFixedPointSolver):
                 break
             previous_output = output
             iteration += 1
-        logger.debug("Naive fixed point iteration stopped after %d iterations", iteration)
+        logger.debug("Naive fixed point iteration stopped after %d iterations", n_iterations)
         return output
 
 
