@@ -27,5 +27,6 @@
     "pylint.importStrategy": "fromEnvironment",
     "pylint.args": ["--rcfile=${workspaceFolder}/.pylintrc"],
     "mypy-type-checker.importStrategy": "fromEnvironment",
-    "mypy-type-checker.args": ["--config-file=${workspaceFolder}/mypy.ini"]
+    "mypy-type-checker.args": ["--config-file=${workspaceFolder}/mypy.ini"],
+    "isort.importStrategy": "fromEnvironment"
 }

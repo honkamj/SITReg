@@ -12,7 +12,7 @@ The setup script will create a virtual enviroment with required packages install
 
     conda activate ./.venv
 
-The repository has been designed to be used with Visual Studio Code (https://code.visualstudio.com/) and it's Python extension (https://marketplace.visualstudio.com/items?itemName=ms-python.python).
+The repository has been designed to be used with Visual Studio Code (https://code.visualstudio.com/).
 
 ## Usage
 

@@ -23,6 +23,7 @@ dependencies:
   - nbconvert
   - tabulate
   - black
+  - isort
   - absl-py
   - pip:
     - nibabel
