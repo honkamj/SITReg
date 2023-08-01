@@ -3,9 +3,6 @@
     "python.linting.enabled": true,
     "python.linting.pylintEnabled": true,
     "python.linting.mypyEnabled": true,
-    "python.linting.mypyArgs": [
-        "--config-file=${workspaceFolder}/mypy.ini"
-    ],
     "jupyter.notebookFileRoot": "${workspaceFolder}/src",
     "notebook.output.textLineLimit": 500,
     "isort.args": [
@@ -24,6 +21,11 @@
     "python.formatting.provider": "black",
     "python.formatting.blackArgs": ["--line-length", "100"],
     "python.analysis.autoImportCompletions": true,
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "editor.detectIndentation": false,
-    "editor.tabSize": 4
+    "editor.tabSize": 4,
+    "pylint.importStrategy": "fromEnvironment",
+    "pylint.args": ["--rcfile=${workspaceFolder}/.pylintrc"],
+    "mypy-type-checker.importStrategy": "fromEnvironment",
+    "mypy-type-checker.args": ["--config-file=${workspaceFolder}/mypy.ini"]
 }
