@@ -117,7 +117,10 @@ def orthonormality(jacobian_matrices: Tensor) -> Tensor:
     orthonormality_product = (
         matmul(jacobian_matrices, jacobian_matrices.transpose(-1, -2)) - identity_matrix
     )
-    return mean(orthonormality_product, dim=get_other_than_batch_dim(orthonormality_product))
+    return mean(
+        orthonormality_product.square(),
+        dim=get_other_than_batch_dim(orthonormality_product)
+    )
 
 
 class JacobianLoss(IRegularityLoss):
