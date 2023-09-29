@@ -1,4 +1,4 @@
-# SITReg: Multi-resolution architecture for symmetric, inverse consistent, and topology preserving image registration using deformation inversion layers
+# SITReg: Multi-resolution architecture for symmetric, inverse consistent, and topology preserving image registration
 
 Official implementation of SITReg, a deep learning intra-modality image registration arhitecture fulfilling strict symmetry properties.
 
