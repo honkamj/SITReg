@@ -13,9 +13,17 @@ from torch.cuda import (
     max_memory_allocated,
     reset_peak_memory_stats,
 )
+from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
 
 from data.interface import IStorage, InferenceMetadata
-from data.storage import FloatStorage, OptionalStorageWrapper, SequenceStorageWrapper, StringStorage, TensorCompressedStorage
+from data.storage import (
+    FloatStorage,
+    OptionalStorageWrapper,
+    SequenceStorageWrapper,
+    StringStorage,
+    TensorCompressedStorage,
+    TorchStorage,
+)
 from util.device import get_device_name
 
 from .interface import ICaseInferenceDefinition, IInferenceDefinition, ITrainingDefinition
@@ -84,6 +92,14 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         self._forward_displacement_fields: list[Tensor | None] = []
         self._inverse_displacement_fields: list[Tensor | None] = []
 
+        self._forward_mappings: list[Optional[IComposableMapping]] = []
+        self._inverse_mappings: list[Optional[IComposableMapping]] = []
+        self._mapping_coordinate_systems: list[Optional[VoxelCoordinateSystem]] = []
+
+        self._save_as_composable_mapping: bool = bool(
+            application_config["inference"].get("save_as_composable_mapping", False)
+        )
+
     def infer(self, batch: Any) -> None:
         image_1, image_2 = batch
         (
@@ -91,6 +107,9 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             resampled_image_2,
             forward_displacement_field,
             inverse_displacement_field,
+            forward_mapping,
+            inverse_mapping,
+            mapping_coordinate_system,
         ) = self._infer(
             image_1=image_1,
             image_2=image_2,
@@ -99,12 +118,19 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         self._resampled_images_2.append(resampled_image_2)
         self._forward_displacement_fields.append(forward_displacement_field)
         self._inverse_displacement_fields.append(inverse_displacement_field)
+        if self._save_as_composable_mapping:
+            self._forward_mappings.append(forward_mapping)
+            self._inverse_mappings.append(inverse_mapping)
+            self._mapping_coordinate_systems.append(mapping_coordinate_system)
         if self._do_reverse_inference:
             (
                 resampled_image_2,
                 resampled_image_1,
                 inverse_displacement_field,
                 forward_displacement_field,
+                inverse_mapping,
+                forward_mapping,
+                mapping_coordinate_system,
             ) = self._infer(
                 image_1=image_2,
                 image_2=image_1,
@@ -113,13 +139,25 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             self._resampled_images_2.append(resampled_image_2)
             self._forward_displacement_fields.append(forward_displacement_field)
             self._inverse_displacement_fields.append(inverse_displacement_field)
+            if self._save_as_composable_mapping:
+                self._forward_mappings.append(forward_mapping)
+                self._inverse_mappings.append(inverse_mapping)
+                self._mapping_coordinate_systems.append(mapping_coordinate_system)
 
     @abstractmethod
     def _infer(
         self,
         image_1: Tensor,
         image_2: Tensor,
-    ) -> tuple[Tensor | None, Tensor | None, Tensor | None, Tensor | None]:
+    ) -> tuple[
+        Tensor | None,
+        Tensor | None,
+        Tensor | None,
+        Tensor | None,
+        IComposableMapping | None,
+        IComposableMapping | None,
+        VoxelCoordinateSystem | None,
+    ]:
         """Do registration between two images"""
 
     def get_outputs(self) -> Mapping[str, Any]:
@@ -129,6 +167,10 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             "forward_displacement_field": self._forward_displacement_fields,
             "inverse_displacement_field": self._inverse_displacement_fields,
         }
+        if self._save_as_composable_mapping:
+            outputs["forward_mapping"] = self._forward_mappings
+            outputs["inverse_mapping"] = self._inverse_mappings
+            outputs["mapping_coordinate_system"] = self._mapping_coordinate_systems
         return outputs | super().get_outputs()
 
 
@@ -151,6 +193,9 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
         application_config: Mapping[str, Any],
     ) -> None:
         self._application_config = application_config
+        self._save_as_composable_mapping: bool = bool(
+            application_config["inference"].get("save_as_composable_mapping", False)
+        )
 
     def get_output_storages(self, inference_metadata: InferenceMetadata) -> Mapping[str, IStorage]:
         num_items = (
@@ -162,7 +207,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
                     inference_metadata.default_storage_factories[0].create(
                         f"{inference_metadata.names[0]}_resampled"
                     ),
-                    name=f"{inference_metadata.names[0]}_resampled"
+                    name=f"{inference_metadata.names[0]}_resampled",
                 ),
                 identifier="input_order",
                 num_items=num_items,
@@ -172,7 +217,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
                     inference_metadata.default_storage_factories[0].create(
                         f"{inference_metadata.names[1]}_resampled"
                     ),
-                    name=f"{inference_metadata.names[1]}_resampled"
+                    name=f"{inference_metadata.names[1]}_resampled",
                 ),
                 identifier="input_order",
                 num_items=num_items,
@@ -180,7 +225,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             "forward_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
                     TensorCompressedStorage(f"{inference_metadata.names[0]}_deformation"),
-                    name=f"{inference_metadata.names[0]}_deformation"
+                    name=f"{inference_metadata.names[0]}_deformation",
                 ),
                 identifier="input_order",
                 num_items=num_items,
@@ -188,12 +233,36 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             "inverse_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
                     TensorCompressedStorage(f"{inference_metadata.names[1]}_deformation"),
-                    name=f"{inference_metadata.names[1]}_deformation"
+                    name=f"{inference_metadata.names[1]}_deformation",
                 ),
                 identifier="input_order",
                 num_items=num_items,
             ),
         }
+        if self._save_as_composable_mapping:
+            output_storages["forward_mapping"] = SequenceStorageWrapper(
+                OptionalStorageWrapper(
+                    TorchStorage(f"{inference_metadata.names[0]}_mapping"),
+                    name=f"{inference_metadata.names[0]}_mapping",
+                ),
+                identifier="input_order",
+                num_items=num_items,
+            )
+            output_storages["inverse_mapping"] = SequenceStorageWrapper(
+                OptionalStorageWrapper(
+                    TorchStorage(f"{inference_metadata.names[1]}_mapping"),
+                    name=f"{inference_metadata.names[1]}_mapping",
+                ),
+                identifier="input_order",
+                num_items=num_items,
+            )
+            output_storages["mapping_coordinate_system"] = SequenceStorageWrapper(
+                OptionalStorageWrapper(
+                    TorchStorage("mapping_coordinate_system"), name="mapping_coordinate_system"
+                ),
+                identifier="input_order",
+                num_items=num_items,
+            )
         return output_storages | super().get_output_storages(inference_metadata)
 
 

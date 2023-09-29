@@ -10,7 +10,7 @@ from threading import Thread
 from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 from torch import device as torch_device
-from torch import no_grad
+from torch import no_grad, set_default_dtype
 from torch.multiprocessing import spawn
 from tqdm import tqdm  # type: ignore
 
@@ -26,6 +26,7 @@ from scripts.file_names import (
     model_state_file_name,
 )
 from util.checkpoint import load_states
+from util.import_util import import_object
 from util.json import load_json, save_json
 from util.logging import configure_logging, configure_logging_for_subprocess
 from util.metrics import MetricsGatherer
@@ -37,6 +38,7 @@ class _InferenceArgs(NamedTuple):
     config: Mapping[str, Any]
     target_dir: str
     data_root: str
+    inference_folder: str
     epoch: int | None
     division: str
     save_outputs: bool
@@ -72,7 +74,10 @@ def _inference_for_index(
         metadata.inference_name,
     )
     case_inference_folder = join(
-        args.target_dir, inference_subfolder(args.epoch, args.division, metadata.inference_name)
+        args.target_dir,
+        inference_subfolder(
+            args.inference_folder, args.epoch, args.division, metadata.inference_name
+        ),
     )
     makedirs(case_inference_folder, exist_ok=True)
     case_metrics_path = join(case_inference_folder, case_metrics_file_name())
@@ -85,11 +90,12 @@ def _inference_for_index(
         not args.skip_existing_evaluations
         or (args.skip_existing_evaluations and not isfile(case_metrics_path))
     )
-    do_inference = (do_evaluation or args.save_outputs) and (
+    do_inference = (
+        do_evaluation or args.save_outputs or (not args.skip_existing_outputs and not args.evaluate)
+    ) and (
         not args.skip_existing_outputs
         or (
-            args.skip_existing_outputs
-            and not storages_exist(
+            not storages_exist(
                 target_folder=case_inference_folder, storages=output_storages.values()
             )
         )
@@ -186,9 +192,7 @@ def _inference_process(
         )
 
 
-def _inference(
-    args: _InferenceArgs
-) -> None:
+def _inference(args: _InferenceArgs) -> None:
     logger.info(
         "Starting inference for epoch %s, division %s",
         get_optional_epoch_as_string(args.epoch),
@@ -203,11 +207,17 @@ def _inference(
     )
     n_cases = len(inference_data_factory)
     case_indeces = range(n_cases)
-    evaluation_listening_args = _EvaluationListeningArgs(
-        inference_data_factory=inference_data_factory,
-        epoch_name=get_optional_epoch_as_string(args.epoch),
-        metrics_filename=join(args.target_dir, metrics_file_name(args.division))
-    ) if args.evaluate else None
+    evaluation_listening_args = (
+        _EvaluationListeningArgs(
+            inference_data_factory=inference_data_factory,
+            epoch_name=get_optional_epoch_as_string(args.epoch),
+            metrics_filename=join(
+                args.target_dir, metrics_file_name(args.inference_folder, args.division)
+            ),
+        )
+        if args.evaluate
+        else None
+    )
     inference_result_listener = Thread(
         target=_inference_results_listener,
         args=(
@@ -283,7 +293,7 @@ def _inference_results_listener(
     case_index_queue: Queue,
     case_indices: Sequence[int],
     n_cases: int,
-    evaluation_listening_args: _EvaluationListeningArgs | None
+    evaluation_listening_args: _EvaluationListeningArgs | None,
 ):
     case_indices_list = list(case_indices)
     if evaluation_listening_args is not None:
@@ -303,7 +313,7 @@ def _inference_results_listener(
     if evaluation_listening_args is not None:
         metrics_gatherer.save_to_json(
             epoch_name=evaluation_listening_args.epoch_name,
-            filename=evaluation_listening_args.metrics_filename
+            filename=evaluation_listening_args.metrics_filename,
         )
 
 
@@ -344,7 +354,14 @@ def _main() -> None:
             "Load all input data of a case to memory before starting the inference. "
             "Useful in measuring inference time."
         ),
-        action="store_true"
+        action="store_true",
+    )
+    parser.add_argument(
+        "--inference-folder",
+        help="Give custom name for inference folder",
+        type=str,
+        required=False,
+        default="inference",
     )
     parser.add_argument(
         "--num-dummy-inferences",
@@ -364,6 +381,7 @@ def _main() -> None:
     else:
         config_path = args.config
     config = load_json(config_path)
+    set_default_dtype(import_object(config.get("dtype", "torch.float32")))
     if args.epoch is None:
         epoch_candidate = find_largest_epoch(target_dir, require_optimizer=False)
         epochs: list[int | None] = [epoch_candidate]
@@ -382,6 +400,7 @@ def _main() -> None:
                 config=config,
                 target_dir=target_dir,
                 data_root=data_root,
+                inference_folder=args.inference_folder,
                 epoch=epoch,
                 division=args.division,
                 save_outputs=not args.do_not_save_outputs,
@@ -391,7 +410,7 @@ def _main() -> None:
                 devices=devices,
                 preload_data=args.preload_data,
                 num_workers=args.num_workers,
-                num_dummy_inferences=args.num_dummy_inferences
+                num_dummy_inferences=args.num_dummy_inferences,
             )
         )
 

@@ -1,5 +1,7 @@
 """Derivative estimation based on finite difference"""
 
+from itertools import product
+from types import EllipsisType
 from typing import Optional, Sequence
 
 from torch import Tensor, stack
@@ -14,6 +16,7 @@ def estimate_spatial_derivatives(
     n_channel_dims=1,
     other_dims: str | None = None,
     central: bool = False,
+    out: Tensor | None = None,
 ) -> Tensor:
     """Calculate spatial derivatives over a dimension estimated using finite differences
 
@@ -41,22 +44,34 @@ def estimate_spatial_derivatives(
                 difference as the dimension over which the derivative is
                 computed by cropping the last element. This can not be used if
                 central == True.
+            crop_both: Apply both crop_first and crop_last to all dimensions and
+                include all variants as a separate dimension with size
+                2**n_dims. Note that the spatial dimension is not cropped and
+                hence the channel contains the same elements repeated twice.
+                Mainly useful when using through
+                estimate_spatial_jacobian_matrices as it then corresponds to
+                calculating the Jacobian matrix at each possible grid corner
+                assuming linear interpolation.
         central: Whether to use central difference [f(x + 1)  - f(x - 1)] / 2 or not
             f(x + 1) - f(x)
+        out: Save output to this Tensor
 
-    Returns:s
-        if central and same_shape: Tensor with shape
+    Returns:
+        if central and other_dims == "crop": Tensor with shape
             (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
             dim_1 - 2, ..., dim_{n_dims} - 2)
-        elif central and not same_shape: Tensor with shape
+        elif central and other_dims is None: Tensor with shape
             (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
-            dim_1, ..., dim_{dim} - 2, ..., dim_{n_dims})
-        elif not central and same_shape: Tensor with shape
+            dim_1, ..., dim_{spatial_dim} - 2, ..., dim_{n_dims})
+        elif not central and other_dims not in (None, "crop_both"): Tensor with shape
             (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
             dim_1 - 1, ..., dim_{n_dims} - 1)
-        elif not central and not same_shape: Tensor with shape
+        elif not central and other_dims == "crop_both": Tensor with shape
             (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
-            dim_{dim} - 1, ..., dim_{n_dims})
+            2**n_dims, dim_1 - 1, ..., dim_{n_dims} - 1)
+        elif not central and other_dims is None: Tensor with shape
+            (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
+            dim_1, ..., dim_{spatial_dim} - 1, ..., dim_{n_dims})
     """
     if central and other_dims not in (None, "crop"):
         raise ValueError(f'Can not use central difference with option other_dims == "{other_dims}"')
@@ -95,6 +110,28 @@ def estimate_spatial_derivatives(
             derivatives[front_cropping_slice_other_dims]
             + derivatives[back_cropping_slice_other_dims]
         ) / 2
+    if other_dims == "crop_both":
+        last_channel_dim = index_by_channel_dims(
+            volume.ndim, channel_dim_index=n_channel_dims - 1, n_channel_dims=n_channel_dims
+        )
+        if out is not None:
+            for index, shifts in enumerate(
+                product([slice(None, -1), slice(1, None)], repeat=n_spatial_dims)
+            ):
+                out[(slice(None),) * (last_channel_dim + 1) + (index,)] = derivatives[
+                    _shifting_slice(spatial_dim=spatial_dim, shifts=shifts)
+                ]
+            return out
+        return stack(
+            [
+                derivatives[_shifting_slice(spatial_dim=spatial_dim, shifts=shifts)]
+                for shifts in product([slice(None, -1), slice(1, None)], repeat=n_spatial_dims)
+            ],
+            dim=last_channel_dim + 1,
+        )
+    if out is not None:
+        out[:] = derivatives
+        return out
     return derivatives
 
 
@@ -104,6 +141,7 @@ def estimate_spatial_jacobian_matrices(
     n_channel_dims: int = 1,
     other_dims: str = "average",
     central: bool = False,
+    out: Tensor | None = None,
 ) -> Tensor:
     """Calculate local Jacobian matrices of a volume estimated using finite differences
 
@@ -112,7 +150,7 @@ def estimate_spatial_jacobian_matrices(
             regularly sampled values of some mapping with the given spacing
         spacing: Voxel sizes along each dimension
         n_channel_dims: Number of channel dimensions
-        other_dims: See option other_dims of algorithm.finite_difference
+        other_dims: See option other_dims of algorithm.finite_difference.
         central: See option central of algorithm.finite_difference
 
     Returns:
@@ -120,15 +158,33 @@ def estimate_spatial_jacobian_matrices(
             Tensor with shape (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
             n_dims, dim_1 - 2, ..., dim_{n_dims} - 2)
         else:
-            Tensor with shape (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
-            n_dims, dim_1 - 1, ..., dim_{n_dims} - 1)
+            if other_dims != "crop_both":
+                Tensor with shape (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
+                    n_dims, dim_1 - 1, ..., dim_{n_dims} - 1)
+            else:
+                Tensor with shape (batch_size, channel_dim_1, ..., channel_dim_{n_channel_dims},
+                    n_dims, 2**n_dims, dim_1 - 1, ..., dim_{n_dims} - 1)
     """
+    if central and other_dims == "crop_both":
+        raise ValueError(f'Can not use central difference with option other_dims == "{other_dims}"')
     n_spatial_dims = num_spatial_dims(volume.ndim, n_channel_dims)
     if spacing is None:
         spacing = [1.0] * n_spatial_dims
     last_channel_dim = index_by_channel_dims(
         volume.ndim, channel_dim_index=n_channel_dims - 1, n_channel_dims=n_channel_dims
     )
+    if out is not None:
+        for dim in range(n_spatial_dims):
+            estimate_spatial_derivatives(
+                volume=volume,
+                spatial_dim=dim,
+                spacing=float(spacing[dim]),
+                n_channel_dims=n_channel_dims,
+                other_dims=other_dims,
+                central=central,
+                out=out[(slice(None),) * (last_channel_dim + 1) + (dim,)],
+            )
+        return out
     return stack(
         [
             estimate_spatial_derivatives(
@@ -142,4 +198,10 @@ def estimate_spatial_jacobian_matrices(
             for dim in range(n_spatial_dims)
         ],
         dim=last_channel_dim + 1,
+    )
+
+
+def _shifting_slice(spatial_dim: int, shifts: Sequence[slice]) -> tuple[slice | EllipsisType, ...]:
+    return (...,) + tuple(
+        slice(None) if spatial_dim == dim else shifts[dim] for dim in range(len(shifts))
     )

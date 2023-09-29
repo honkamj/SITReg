@@ -50,3 +50,10 @@ class SplineInterpolator(IInterpolator):
             degree=self._degree,
             extrapolate=self._extrapolate,
         )
+
+
+class EmptyInterpolator(IInterpolator):
+    """Empty interpolator raising error if called"""
+
+    def __call__(self, volume: Tensor, coordinates: Tensor) -> Tensor:
+        raise RuntimeError("Empty interpolator can not be called!")

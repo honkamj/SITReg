@@ -112,12 +112,13 @@ class FunctionDimensionStructureModifier:
             arguments = signature(func).bind(*args, **kwargs).arguments
             for arg_name, arg_value in arguments.items():
                 if arg_name in self._num_input_channel_dims:
-                    if not isinstance(arg_value, Tensor):
-                        raise ValueError('"argument_name" not a Tensor!')
-                    kwargs_num_channels[arg_name] = (
-                        arg_value,
-                        self._num_input_channel_dims[arg_name],
-                    )
+                    if isinstance(arg_value, Tensor):
+                        kwargs_num_channels[arg_name] = (
+                            arg_value,
+                            self._num_input_channel_dims[arg_name],
+                        )
+                    else:
+                        kwargs_num_channels[arg_name] = (arg_value, None)
                 else:
                     kwargs_num_channels[arg_name] = (arg_value, None)
         else:
@@ -187,7 +188,7 @@ class BatchDimensionMerger:
 
 def merged_batch_dimensions(
     num_input_non_batch_dims: Optional[Union[int, Mapping[str, int]]] = 1,
-    num_return_non_bach_dims: Optional[Union[int, Sequence[int]]] = 1,
+    num_return_non_batch_dims: Optional[Union[int, Sequence[int]]] = 1,
 ):
     """Function wrapper that merges batch dimensions into one
     dimension for input and then splits them back for output
@@ -202,7 +203,7 @@ def merged_batch_dimensions(
             batch_dimension_merger = BatchDimensionMerger()
             modifier = FunctionDimensionStructureModifier(
                 num_input_channel_dims=num_input_non_batch_dims,
-                num_return_channel_dims=num_return_non_bach_dims,
+                num_return_channel_dims=num_return_non_batch_dims,
                 input_modifier=batch_dimension_merger.merge,
                 output_modifier=batch_dimension_merger.unmerge,
             )

@@ -27,13 +27,14 @@ class IFixedPointSolver(ABC):
     @abstractmethod
     def solve(
         self,
-        fixed_point_function: Callable[[Tensor], Tensor],
+        fixed_point_function: Callable[[Tensor, Tensor], None],
         initial_value: Tensor,
     ) -> Tensor:
         """Solve fixed point problem
 
         Args:
-            fixed_point_function: Function to be iterated
+            fixed_point_function: Function to be iterated, the second argument is a 
+                Tensor where the output should be saved.
             initial_value: Initial iteration value
 
         Returns: Solution of the fixed point iteration

@@ -42,7 +42,6 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
         n_transformation_convolutions_per_resolution=model_config[
             "n_transformation_convolutions_per_resolution"
         ],
-        max_displacements=model_config["max_displacements"],
         affine_transformation_type=(
             AffineTransformationTypeDefinition.full() if model_config["predict_affine"] else None
         ),
@@ -85,6 +84,7 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
                 **displacement_field_inversion_config["backward_fixed_point_solver"]["arguments"]
             ),
         ),
+        max_control_point_multiplier=model_config["max_control_point_multiplier"],
         activation=relu,
     )
     logger.info(

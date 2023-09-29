@@ -45,6 +45,14 @@ class IAffineTransformation(ABC):
         Might return self.
         """
 
+    @abstractmethod
+    def to_device(self, device: torch_device) -> "IAffineTransformation":
+        """Put underlying Tensors to given device"""
+
+    @abstractmethod
+    def to_dtype(self, dtype: torch_dtype) -> "IAffineTransformation":
+        """Put underlying Tensors to given dtype"""
+
 
 class ICPUComposableAffineTransformation(IAffineTransformation):
     """Affine mapping which has separate representation on CPU
@@ -177,6 +185,14 @@ class IComposableMapping(ABC):
 
         Might return self.
         """
+
+    @abstractmethod
+    def to_device(self, device: torch_device) -> "IComposableMapping":
+        """Put underlying Tensors to given device"""
+
+    @abstractmethod
+    def to_dtype(self, dtype: torch_dtype) -> "IComposableMapping":
+        """Put underlying Tensors to given dtype"""
 
 
 @define

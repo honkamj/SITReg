@@ -1,5 +1,10 @@
 """Base classes for composable mapping"""
 
+from torch import device as torch_device
+from torch import dtype as torch_dtype
+
+from algorithm.composable_mapping.interface import IComposableMapping
+
 from .interface import IComposableMapping, IMaskedTensor
 
 
@@ -33,4 +38,12 @@ class _Composition(BaseComposableMapping):
         return (
             f"<algorithm.composable_mapping.base._Composition, "
             f"left: {self._left_mapping}, right: {self._right_mapping}>"
+        )
+
+    def to_dtype(self, dtype: torch_dtype) -> "_Composition":
+        return _Composition(self._left_mapping.to_dtype(dtype), self._right_mapping.to_dtype(dtype))
+
+    def to_device(self, device: torch_device) -> "_Composition":
+        return _Composition(
+            self._left_mapping.to_device(device), self._right_mapping.to_device(device)
         )

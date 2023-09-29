@@ -6,7 +6,7 @@ from os.path import join
 from typing import Sequence, cast
 
 from nibabel import load as nib_load  # type: ignore
-from torch import Tensor, from_numpy, ones
+from torch import Tensor, from_numpy, get_default_dtype, ones
 
 from data.base import BaseDataDownloader, BaseVolumetricRegistrationData
 from data.interface import VolumetricDataArgs
@@ -61,7 +61,7 @@ class OasisData(BaseVolumetricRegistrationData):
 
     def _get_raw_data_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
         data = self._get_spatial_image_for_case(case_name, args.file_type).get_fdata()
-        return from_numpy(data.astype("float32"))
+        return from_numpy(data).to(get_default_dtype())
 
     def _get_raw_mask_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
         shape = self._get_raw_shape_for_case(case_name, args)

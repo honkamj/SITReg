@@ -20,6 +20,7 @@ def estimate_spatial_derivatives_for_mapping(
     central: bool = False,
     device: Optional[torch_device] = None,
     dtype: Optional[torch_dtype] = None,
+    out: Tensor | None = None,
 ) -> Tensor:
     """Calculate spatial derivative over a dimension
 
@@ -51,6 +52,7 @@ def estimate_spatial_derivatives_for_mapping(
         n_channel_dims=n_channel_dims,
         other_dims=other_dims,
         central=central,
+        out=out,
     )
 
 
@@ -61,6 +63,7 @@ def estimate_spatial_jacobian_matrices_for_mapping(
     central: bool = False,
     device: Optional[torch_device] = None,
     dtype: Optional[torch_dtype] = None,
+    out: Tensor | None = None,
 ) -> Tensor:
     """Calculate local Jacobian matrices of a mapping
 
@@ -84,4 +87,5 @@ def estimate_spatial_jacobian_matrices_for_mapping(
         n_channel_dims=n_channel_dims,
         other_dims=other_dims,
         central=central,
+        out=out,
     )

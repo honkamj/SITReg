@@ -21,6 +21,9 @@ class OasisInferenceFactory(BaseVolumetricRegistrationInferenceFactory):
         super().__init__(dataset)
         self._evaluation_mask_file_type_seg35 = data_config["evaluation_mask_file_type_seg35"]
         self._metrics_to_compute = data_config["metrics"][dataset.division]
+        self._n_jacobian_samples = data_config.get("n_jacobian_samples_in_evaluation")
+        self._evaluation_prefix = data_config.get("evaluation_prefix", "")
+        self._jacobian_sampling_base_seed = data_config.get("jacobian_sampling_base_seed", None)
 
     def _get_storage_factory(self, affine: Tensor) -> NiftiStorageFactory:
         return NiftiStorageFactory(affine)
@@ -43,5 +46,10 @@ class OasisInferenceFactory(BaseVolumetricRegistrationInferenceFactory):
             source_temp_storage_factory=self._get_storage_factory(image_1_affine),
             source_name=image_1_name,
             target_temp_storage_factory=self._get_storage_factory(image_2_affine),
-            target_name=image_2_name
+            target_name=image_2_name,
+            n_jacobian_samples=self._n_jacobian_samples,
+            jacobian_sampling_seed=self._jacobian_sampling_base_seed ^ index
+            if self._jacobian_sampling_base_seed is not None
+            else None,
+            evaluation_prefix=self._evaluation_prefix,
         )

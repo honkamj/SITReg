@@ -13,8 +13,8 @@ class FixedPointSolverTests(TestCase):
     """Tests for fixed point solvers"""
     def test_anderson_solver(self):
         """Test that anderson solver converges to correct value"""
-        def func(tensor: Tensor) -> Tensor:
-            return (7 / tensor + tensor) / 2
+        def func(tensor: Tensor, out: Tensor) -> None:
+            out[:] = (7 / tensor + tensor) / 2
         initial_value = rand(5, 10, 10) + 4
         assert_close(
             sqrt(7 * ones_like(initial_value)),

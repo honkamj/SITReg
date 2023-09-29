@@ -43,6 +43,22 @@ class RectangleMask(BaseComposableMapping):
     def detach(self) -> "RectangleMask":
         return self
 
+    def to_device(self, device: torch_device) -> "RectangleMask":
+        return RectangleMask(
+            min_values=self._min_values,
+            max_values=self._max_values,
+            device=device,
+            dtype=self._dtype
+        )
+
+    def to_dtype(self, dtype: torch_dtype) -> "RectangleMask":
+        return RectangleMask(
+            min_values=self._min_values,
+            max_values=self._max_values,
+            device=self._device,
+            dtype=dtype
+        )
+
 
 class ClearMask(BaseComposableMapping):
     """Add values to mask based on bounds"""
@@ -54,4 +70,10 @@ class ClearMask(BaseComposableMapping):
         raise NotImplementedError("Mask clearing is not invertible")
 
     def detach(self) -> "ClearMask":
+        return self
+
+    def to_device(self, device: torch_device) -> "ClearMask":
+        return self
+
+    def to_dtype(self, dtype: torch_dtype) -> "ClearMask":
         return self

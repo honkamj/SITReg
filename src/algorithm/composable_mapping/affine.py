@@ -7,6 +7,7 @@ from torch import Tensor, allclose
 from torch import device as torch_device
 from torch import dtype as torch_dtype
 from torch import eye, inverse, matmul
+from algorithm.composable_mapping.interface import IComposableMapping
 
 from util.dimension_order import (
     broadcast_tensors_by_leading_dims,
@@ -91,6 +92,12 @@ class Affine(BaseAffine):
     def detach(self) -> "Affine":
         return Affine(self._transformation_matrix.detach())
 
+    def to_device(self, device: torch_device) -> "Affine":
+        return Affine(self._transformation_matrix.to(device=device))
+
+    def to_dtype(self, dtype: torch_dtype) -> "Affine":
+        return Affine(self._transformation_matrix.type(dtype))
+
 
 class Identity(BaseAffine, ICPUComposableAffineTransformation):
     """Identity transformation"""
@@ -116,6 +123,12 @@ class Identity(BaseAffine, ICPUComposableAffineTransformation):
         return eye(self._n_dims + 1, device=torch_device("cpu"), dtype=dtype)
 
     def detach(self) -> "Identity":
+        return self
+
+    def to_device(self, device: torch_device) -> "Identity":
+        return self
+
+    def to_dtype(self, dtype: torch_dtype) -> "Identity":
         return self
 
 
@@ -182,6 +195,12 @@ class CPUComposableAffine(BaseAffine, ICPUComposableAffineTransformation):
     def detach(self) -> "CPUComposableAffine":
         return self
 
+    def to_dtype(self, dtype: torch_dtype) -> "CPUComposableAffine":
+        return CPUComposableAffine(self._transformation_matrix_cpu.type(dtype))
+
+    def to_device(self, device: torch_device) -> "CPUComposableAffine":
+        return self
+
 
 class _CPUComposableAffineComposition(CPUComposableAffine):
     def __init__(
@@ -201,6 +220,14 @@ class _CPUComposableAffineComposition(CPUComposableAffine):
             self._right_transformation.as_matrix(device),
         )
 
+    def to_dtype(self, dtype: torch_dtype) -> "_CPUComposableAffineComposition":
+        return _CPUComposableAffineComposition(
+            self._left_transformation.to_dtype(dtype), self._right_transformation.to_dtype(dtype)
+        )
+
+    def to_device(self, device: torch_device) -> "_CPUComposableAffineComposition":
+        return self
+
     def detach(self) -> "_CPUComposableAffineComposition":
         return self
 
@@ -213,12 +240,21 @@ class _CPUComposableAffineInverse(CPUComposableAffine):
     def _as_matrix(self, device: torch_device) -> Tensor:
         return channels_last(2, 2)(inverse)(self._transformation_to_invert.as_matrix(device))
 
+    def to_dtype(self, dtype: torch_dtype) -> "_CPUComposableAffineInverse":
+        return _CPUComposableAffineInverse(
+            self._transformation_to_invert.to_dtype(dtype)
+        )
+
+    def to_device(self, device: torch_device) -> "_CPUComposableAffineInverse":
+        return self
+
     def detach(self) -> "_CPUComposableAffineInverse":
         return self
 
 
 class _CPUComposableAffineCache(CPUComposableAffine):
     def __init__(self, transformation_to_cache: CPUComposableAffine) -> None:
+        self._transformation_to_cache = transformation_to_cache
         self._matrix_cache = TensorCache(transformation_to_cache.as_matrix)
         super().__init__(transformation_to_cache.as_cpu_matrix())
 
@@ -226,6 +262,12 @@ class _CPUComposableAffineCache(CPUComposableAffine):
         return self._matrix_cache.get(device=device, dtype=self._transformation_matrix_cpu.dtype)
 
     def detach(self) -> "_CPUComposableAffineCache":
+        return self
+
+    def to_dtype(self, dtype: torch_dtype) -> "_CPUComposableAffineCache":
+        return _CPUComposableAffineCache(self._transformation_to_cache.to_dtype(dtype))
+
+    def to_device(self, device: torch_device) -> "_CPUComposableAffineCache":
         return self
 
 
@@ -271,6 +313,12 @@ class ComposableAffine(BaseComposableMapping):
 
     def detach(self) -> "ComposableAffine":
         return ComposableAffine(self._affine_transformation.detach())
+
+    def to_device(self, device: torch_device) -> "ComposableAffine":
+        return ComposableAffine(self._affine_transformation.to_device(device))
+
+    def to_dtype(self, dtype: torch_dtype) -> "ComposableAffine":
+        return ComposableAffine(self._affine_transformation.to_dtype(dtype))
 
 
 def as_affine_transformation(

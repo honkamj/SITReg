@@ -22,15 +22,15 @@ For this section we assume that you have navigated to directory ''src'' and have
 
 To train the model used in the paper with affinely aligned brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
 
-    python -m scripts.train --config scripts/configs/sitreg/oasis/cc_grad_1.0_small_disp.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
+    python -m scripts.train --config scripts/configs/sitreg/oasis/cc_grad_1.0.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
 To train the model used in the paper with raw (not affinely aligned) brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
 
-    python -m scripts.train --config scripts/configs/sitreg/oasis/cc_grad_1.0_small_disp_raw_data.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
+    python -m scripts.train --config scripts/configs/sitreg/oasis/cc_grad_1.0_raw_data.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
 To train the model used in the paper with LPBA40 dataset (https://resource.loni.usc.edu/resources/atlases-downloads/), run the following command:
 
-    python -m scripts.train --config scripts/configs/sitreg/lpba40/cc_grad_1.0_small_disp_very_deep.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
+    python -m scripts.train --config scripts/configs/sitreg/lpba40/cc_grad_1.0_very_very_deep.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
 The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices or if the data is no longer available at the url specified within the code.
 
@@ -58,7 +58,7 @@ If you are only interested in *deformation inversion layer*, a neural network co
 
 If you use the repository, please cite (see [bibtex](citations.bib)):
 
-- **SITReg: Multi-resolution architecture for symmetric, inverse consistent, and topology preserving image registration using deformation inversion layers**  
+- **SITReg: Multi-resolution architecture for symmetric, inverse consistent, and topology preserving image registration**  
 [Joel Honkamaa](https://github.com/honkamj "Joel Honkamaa"), Pekka Marttinen  
 Under review ([eprint arXiv:2303.10211](https://arxiv.org/abs/2303.10211 "eprint arXiv:2303.10211"))
 

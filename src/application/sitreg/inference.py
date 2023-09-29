@@ -9,6 +9,7 @@ from torch.nn import Module
 
 from algorithm.composable_mapping.factory import ComposableFactory
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs, as_displacement_field
+from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
 from algorithm.interpolator import LinearInterpolator
 from application.base import (
     BaseRegistrationCaseInferenceDefinition,
@@ -35,13 +36,24 @@ class SITRegCaseInference(BaseRegistrationCaseInferenceDefinition):
             if application_config["inference"].get("save_intermediate_mappings_for_levels") is None
             else application_config["inference"]["save_intermediate_mappings_for_levels"]
         )
+        self._resample_when_composing: bool = bool(
+            application_config["inference"].get("resample_when_composing", True)
+        )
         self._intermediate_mappings: list[list[Optional[tuple[Tensor, Tensor]]]] = []
 
     def _infer(
         self,
         image_1: Tensor,
         image_2: Tensor,
-    ) -> tuple[Tensor | None, Tensor | None, Tensor | None, Tensor | None]:
+    ) -> tuple[
+        Tensor | None,
+        Tensor | None,
+        Tensor | None,
+        Tensor | None,
+        IComposableMapping | None,
+        IComposableMapping | None,
+        VoxelCoordinateSystem | None,
+    ]:
         assert image_1.size(0) == 1 and image_2.size(0) == 1
         image_1 = image_1.to(self._device)
         image_2 = image_2.to(self._device)
@@ -53,6 +65,7 @@ class SITRegCaseInference(BaseRegistrationCaseInferenceDefinition):
             image_2,
             mappings_for_levels=[(0, True)]
             + [(level_index, True) for level_index in self._save_intermediate_mappings_for_levels],
+            resample_when_composing=self._resample_when_composing,
         )
         coordinate_system = self._model.image_coordinate_system
         image_1_mapping = ComposableFactory.create_volume(
@@ -114,6 +127,9 @@ class SITRegCaseInference(BaseRegistrationCaseInferenceDefinition):
             resampled_image_2,
             forward_displacement_field,
             inverse_displacement_field,
+            mapping_pair.forward_mapping,
+            mapping_pair.inverse_mapping,
+            coordinate_system
         )
 
     def get_outputs(self) -> Mapping[str, Any]:

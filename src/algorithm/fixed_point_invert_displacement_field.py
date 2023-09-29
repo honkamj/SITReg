@@ -52,7 +52,7 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
     """Fixed point invert displacement field"""
 
     @staticmethod
-    def _forward_fixed_point_mapping(
+    def _forward_fixed_point_iteration_step(
         inverted_displacement_field: Tensor,
         displacement_field: Tensor,
         interpolator: IInterpolator,
@@ -64,13 +64,29 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
         )
 
     @staticmethod
+    def _forward_fixed_point_mapping(
+        inverted_displacement_field: Tensor,
+        out: Tensor,
+        displacement_field: Tensor,
+        interpolator: IInterpolator,
+        voxel_coordinate_grid: Tensor,
+    ) -> None:
+        out[:] = _FixedPointInvertDisplacementField._forward_fixed_point_iteration_step(
+            inverted_displacement_field=inverted_displacement_field,
+            displacement_field=displacement_field,
+            interpolator=interpolator,
+            voxel_coordinate_grid=voxel_coordinate_grid,
+        )
+
+    @staticmethod
     def _backward_fixed_point_mapping(
         vjp_estimate: Tensor,
+        out: Tensor,
         inverted_displacement_field: Tensor,
         forward_fixed_point_output: Tensor,
         grad_output: Tensor,
-    ) -> Tensor:
-        return (
+    ) -> None:
+        out[:] = (
             grad(
                 outputs=forward_fixed_point_output,
                 inputs=inverted_displacement_field,
@@ -139,7 +155,7 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
                 displacement_field.requires_grad_(True)
                 inverted_displacement_field.requires_grad_(True)
                 forward_fixed_point_output = (
-                    _FixedPointInvertDisplacementField._forward_fixed_point_mapping(
+                    _FixedPointInvertDisplacementField._forward_fixed_point_iteration_step(
                         inverted_displacement_field=inverted_displacement_field,
                         displacement_field=displacement_field,
                         interpolator=arguments.interpolator,

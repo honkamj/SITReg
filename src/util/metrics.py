@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from numpy.ma import masked_invalid as np_masked_invalid
 from torch import device as torch_device
-from torch import empty, float32, tensor
+from torch import empty, get_default_dtype, tensor
 from torch.distributed import recv as distributed_recv
 from torch.distributed import send as distributed_send
 
@@ -53,13 +53,15 @@ class LossAverager:
                 for loss_name in sorted(self._loss_sums.keys())
             ],
             device=device,
-            dtype=float32,
+            dtype=get_default_dtype(),
         )
         distributed_send(losses, dst=target_training_process_rank)
 
     def receive(self, device: torch_device, source_training_process_rank: int) -> None:
         """Receive loss data from other processes"""
-        receiving_tensor = empty((len(self._loss_sums), 2), dtype=float32, device=device)
+        receiving_tensor = empty(
+            (len(self._loss_sums), 2), dtype=get_default_dtype(), device=device
+        )
         distributed_recv(receiving_tensor, src=source_training_process_rank)
         self.count(
             {

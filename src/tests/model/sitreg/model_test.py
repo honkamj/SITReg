@@ -36,7 +36,7 @@ class SITRegTests(TestCase):
             feature_extractor=feature_extractor,
             n_transformation_convolutions_per_resolution=[2, 2, 2],
             n_transformation_features_per_resolution=[16, 32, 64],
-            max_displacements=[6.0, 6.0, 6.0],
+            max_control_point_multiplier=0.99,
             affine_transformation_type=AffineTransformationTypeDefinition.full(),
             input_voxel_size=(1.0, 2.0),
             input_shape=(64, 64),

@@ -39,9 +39,9 @@ def loss_history_file_name() -> str:
     return 'loss_history.json'
 
 
-def metrics_file_name(division: str) -> str:
+def metrics_file_name(inference_folder: str, division: str) -> str:
     """Metrics file name"""
-    return f'metrics_{division}.json'
+    return f'metrics_{inference_folder}_{division}.json'
 
 
 def case_metrics_file_name() -> str:
@@ -73,6 +73,7 @@ def find_largest_epoch(
 
 
 def inference_subfolder(
+        inference_folder: str,
         epoch: int | None,
         division: str,
         case_name: str,
@@ -82,7 +83,7 @@ def inference_subfolder(
         epoch_folder = 'no_epoch'
     else:
         epoch_folder = f'epoch_{epoch + 1:03d}'
-    return join('inference', epoch_folder, division, case_name)
+    return join(inference_folder, epoch_folder, division, case_name)
 
 
 def get_optional_epoch_as_string(epoch: int | None) -> str:

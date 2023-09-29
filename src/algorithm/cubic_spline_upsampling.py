@@ -38,38 +38,54 @@ class CubicSplineUpsampling(Module):
         upsampling_factor: Dimension size is multiplied by this
     """
 
-    def __init__(self, upsampling_factor: Union[int, Sequence[int]]) -> None:
+    def __init__(
+        self, upsampling_factor: Union[int, Sequence[int]], dtype: torch_dtype | None = None
+    ) -> None:
         super().__init__()
         if isinstance(upsampling_factor, Sequence):
-            self._upsampling_kernels = ParameterList(
+            self.upsampling_kernels = ParameterList(
                 [
-                    Parameter(_cubic_bspline_kernel_1d(factor), requires_grad=False)
+                    Parameter(cubic_bspline_kernel_1d(factor, dtype=dtype), requires_grad=False)
                     for factor in upsampling_factor
                 ]
             )
         else:
-            self._upsampling_kernels = ParameterList(
-                [Parameter(_cubic_bspline_kernel_1d(upsampling_factor), requires_grad=False)]
+            self.upsampling_kernels = ParameterList(
+                [
+                    Parameter(
+                        cubic_bspline_kernel_1d(upsampling_factor, dtype=dtype), requires_grad=False
+                    )
+                ]
             )
         self._upsampling_factor = upsampling_factor
 
-    def forward(self, volume: Tensor, calculate_coefficients_inplace: bool = False) -> Tensor:
+    def forward(
+        self,
+        volume: Tensor,
+        apply_prefiltering: bool = True,
+        prefilter_inplace: bool = False,
+    ) -> Tensor:
         """Cubic spline upsample a volume
 
         Args:
             volume: Tensor with shape ([batch_size, n_channels, ]dim_1, ..., dim_{n_dims})
+            apply_prefiltering: Whether to apply prefiltering
+            prefilter_inplace: Whether to perform the prefiltering step in-place
         """
-        if self._upsampling_factor == 1:
+        if apply_prefiltering and self._upsampling_factor == 1:
             return volume
-        upsampled = cubic_spline_coefficients(volume, inplace=calculate_coefficients_inplace)
+        if apply_prefiltering:
+            upsampled = cubic_spline_coefficients(volume, inplace=prefilter_inplace)
+        else:
+            upsampled = volume
         first_spatial_dim = min(volume.ndim - 1, 2)
         n_dims = volume.ndim - first_spatial_dim
         if isinstance(self._upsampling_factor, int):
             upsampling_factors: Sequence[int] = n_dims * [self._upsampling_factor]
-            upsampling_kernels: list[Parameter] = n_dims * list(self._upsampling_kernels)
+            upsampling_kernels: list[Parameter] = n_dims * list(self.upsampling_kernels)
         else:
             upsampling_factors = self._upsampling_factor
-            upsampling_kernels = list(self._upsampling_kernels)
+            upsampling_kernels = list(self.upsampling_kernels)
         for dim, upsampling_factor, upsampling_kernel in zip(
             range(first_spatial_dim, upsampled.ndim), upsampling_factors, upsampling_kernels
         ):
@@ -94,6 +110,7 @@ class _CubicSplineCoefficients(Function):  # pylint: disable=abstract-method
 
     The function has identical forward and backward passes.
     """
+
     @staticmethod
     def forward(ctx, volume: Tensor, inplace: bool = False) -> Tensor:  # type: ignore # pylint: disable=arguments-differ
         return _cubic_spline_coefficients(volume, inplace)
@@ -132,7 +149,7 @@ def _transposed_conv1d(
 
 
 @script
-def _cubic_spline_1d(points: Tensor) -> Tensor:
+def cubic_spline_1d(points: Tensor) -> Tensor:
     """Cubic spline basis function"""
     points_abs = torch_abs(points)
     output = (2 / 3 + (0.5 * points_abs - 1) * points_abs**2) * (points_abs < 1)
@@ -141,7 +158,7 @@ def _cubic_spline_1d(points: Tensor) -> Tensor:
 
 
 @script
-def _cubic_bspline_kernel_1d(
+def cubic_bspline_kernel_1d(
     upsampling_factor: int,
     dtype: Optional[torch_dtype] = None,
     device: Optional[torch_device] = None,
@@ -152,7 +169,7 @@ def _cubic_bspline_kernel_1d(
     step_size = 1 / upsampling_factor
     start = (1 + is_odd) / (2 * upsampling_factor) - 2
     points = arange(kernel_size, dtype=dtype, device=device) * step_size + start
-    return _cubic_spline_1d(points)
+    return cubic_spline_1d(points)
 
 
 @script

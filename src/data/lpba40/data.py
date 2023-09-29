@@ -12,7 +12,7 @@ from nibabel import load as nib_load
 from nibabel import save as nib_save
 from numpy import abs as np_abs
 from numpy import sum as np_sum
-from torch import Tensor, from_numpy, ones, tensor
+from torch import Tensor, from_numpy, get_default_dtype, ones, tensor
 
 from algorithm.affine_transformation import embed_transformation, generate_scale_matrix
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs
@@ -192,7 +192,7 @@ class LPBA40DataDownloader(BaseDataDownloader):
     def _transform_analyze_by_air_and_save_to_nifti(
         cls, case_folder: str, source_header_name: str, target_name: str, air_name: str
     ) -> None:
-        image = nib_load(join(case_folder, source_header_name))
+        image = cast(Nifti1Image, nib_load(join(case_folder, source_header_name)))
         image_tensor = from_numpy(image.get_fdata()[None, ..., 0])
         with open(join(case_folder, air_name), "rb") as air_file:
             air = read_air_file(air_file)
@@ -223,7 +223,7 @@ class LPBA40DataDownloader(BaseDataDownloader):
         source_header_name: str,
         target_name: str,
     ) -> None:
-        image = nib_load(join(case_folder, source_header_name))
+        image = cast(Nifti1Image, nib_load(join(case_folder, source_header_name)))
         voxel_size = tensor(image.header["pixdim"][1:4])
         nifti_image = Nifti1Image(
             image.get_fdata()[..., 0],
@@ -241,8 +241,8 @@ class LPBA40DataDownloader(BaseDataDownloader):
         normalized_name: str,
         tissue_mask_name: str,
     ) -> None:
-        image = nib_load(join(case_folder, normalized_name))
-        tissue_mask_image = nib_load(join(case_folder, tissue_mask_name))
+        image = cast(Nifti1Image, nib_load(join(case_folder, normalized_name)))
+        tissue_mask_image = cast(Nifti1Image, nib_load(join(case_folder, tissue_mask_name)))
         wm_tissue_mask = np_abs(tissue_mask_image.get_fdata() - 3) < 1e-5
         image_data = image.get_fdata()
         normalized_image = image_data / (
@@ -261,8 +261,8 @@ class LPBA40DataDownloader(BaseDataDownloader):
         label_name: str,
         tissue_mask_name: str,
     ) -> None:
-        image = nib_load(join(case_folder, label_name))
-        tissue_mask_image = nib_load(join(case_folder, tissue_mask_name))
+        image = cast(Nifti1Image, nib_load(join(case_folder, label_name)))
+        tissue_mask_image = cast(Nifti1Image, nib_load(join(case_folder, tissue_mask_name)))
         brain_mask = tissue_mask_image.get_fdata() > 0
         image_data = image.dataobj[...]
         masked_image = (image_data * brain_mask).astype(image_data.dtype)
@@ -317,12 +317,8 @@ class LPBA40Data(BaseVolumetricRegistrationData):
         return self._get_spatial_image_for_case(case_name, args.file_type).shape
 
     def _get_raw_data_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        data = (
-            self._get_spatial_image_for_case(case_name, args.file_type)
-            .get_fdata()
-            .astype("float32")
-        )
-        return from_numpy(data)
+        data = self._get_spatial_image_for_case(case_name, args.file_type).get_fdata()
+        return from_numpy(data).to(get_default_dtype())
 
     def _get_raw_mask_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
         shape = self._get_raw_shape_for_case(case_name, args)

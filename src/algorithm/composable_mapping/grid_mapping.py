@@ -7,6 +7,8 @@ from torch import Tensor
 from torch import device as torch_device
 from torch import dtype as torch_dtype
 
+from algorithm.composable_mapping.interface import IComposableMapping
+
 from ..dense_deformation import calculate_mask_at_voxel_coordinates, generate_voxel_coordinate_grid
 from ..fixed_point_invert_displacement_field import (
     DisplacementFieldInversionArguments,
@@ -138,7 +140,23 @@ class GridVolume(BaseComposableMapping):
             data=self._data.detach(),
             grid_mapping_args=self._grid_mapping_args,
             n_channel_dims=self._n_channel_dims,
-            mask=self._mask,
+            mask=self._mask.detach() if self._mask is not None else None,
+        )
+
+    def to_dtype(self, dtype: torch_dtype) -> "GridVolume":
+        return GridVolume(
+            data=self._data.type(dtype),
+            grid_mapping_args=self._grid_mapping_args,
+            n_channel_dims=self._n_channel_dims,
+            mask=self._mask.type(dtype) if self._mask is not None else None,
+        )
+
+    def to_device(self, device: torch_device) -> "GridVolume":
+        return GridVolume(
+            data=self._data.to(device=device),
+            grid_mapping_args=self._grid_mapping_args,
+            n_channel_dims=self._n_channel_dims,
+            mask=self._mask.to(device=device) if self._mask is not None else None,
         )
 
 
@@ -250,7 +268,21 @@ class GridCoordinateMapping(GridVolume):
         return GridCoordinateMapping(
             displacement_field=self._data.detach(),
             grid_mapping_args=self._grid_mapping_args,
-            mask=self._mask,
+            mask=self._mask.detach() if self._mask is not None else None,
+        )
+
+    def to_dtype(self, dtype: torch_dtype) -> "GridCoordinateMapping":
+        return GridCoordinateMapping(
+            displacement_field=self._data.type(dtype),
+            grid_mapping_args=self._grid_mapping_args,
+            mask=self._mask.type(dtype) if self._mask is not None else None,
+        )
+
+    def to_device(self, device: torch_device) -> "GridCoordinateMapping":
+        return GridCoordinateMapping(
+            displacement_field=self._data.to(device=device),
+            grid_mapping_args=self._grid_mapping_args,
+            mask=self._mask.to(device=device) if self._mask is not None else None,
         )
 
 

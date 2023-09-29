@@ -1,22 +1,23 @@
 {
     "data": {
-        "module": "lpba40",
+        "module": "oasis",
         "config": {
             "batch_size": 1,
             "iterate_inference_pairs_in_both_directions": false,
             "downsampling_factor": [1, 1, 1],
-            "crop": [[11, 10], [20, 5], [0, 21]],
+            "crop": [[0, 0], [0, 0], [0, 0]],
             "normalize": false,
-            "shift_and_normalize": null,
             "seed": 123456789,
-            "file_type": "delineation.brain.bfc",
-            "evaluation_mask_file_type": "delineation.structure.label",
+            "file_type": "norm",
+            "evaluation_mask_file_type_seg35": "seg35",
             "training_pairs_per_epoch": 5000,
             "n_training_cases": null,
             "metrics": {
-		    	"validate": ["dice", "determinant", "inverse_consistency"],
-		    	"test": ["dice", "hd95", "determinant", "inverse_consistency"]
-		    }
+		    	"validate": ["dice", "sampled_determinant", "inverse_consistency"],
+		    	"test": ["dice", "hd95", "sampled_determinant", "inverse_consistency"]
+		    },
+            "n_jacobian_samples_in_evaluation": 1000000,
+            "jacobian_sampling_base_seed": 8524561973
         }
     },
     "application": {
@@ -24,7 +25,9 @@
         "config": {
             "inference": {
         		"save_intermediate_mappings_for_levels": null,
-                "do_reverse_inference": true
+                "do_reverse_inference": true,
+                "save_as_composable_mapping": true,
+                "resample_when_composing": true
         	},
             "model": {
                 "n_features_per_resolution": [
@@ -32,9 +35,17 @@
                     36,
                     36,
                     36,
-                    36
+                    36,
+                    36,
+                    48,
+                    64,
+                    88
                 ],
                 "n_feature_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
                     2,
                     2,
                     2,
@@ -46,24 +57,26 @@
                     62,
                     62,
                     62,
-                    62
+                    62,
+                    62,
+                    null,
+                    null,
+                    null
                 ],
                 "n_transformation_convolutions_per_resolution": [
                     2,
                     2,
                     2,
                     2,
-                    2
+                    2,
+                    2,
+                    null,
+                    null,
+                    null
                 ],
-                "max_displacements": [
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15,
-                    0.15
-                ],
+                "max_control_point_multiplier": 0.99,
                 "transformation_downsampling_factor": [1.0, 1.0, 1.0],
-                "predict_affine": false,
+                "predict_affine": true,
                 "normalizer": {
                     "type": "GroupNormalizerFactory",
                     "args": {
@@ -72,7 +85,7 @@
                 },
                 "n_input_channels": 1,
                 "voxel_size": [1.0, 1.0, 1.0],
-                "input_shape": [160, 192, 160],
+                "input_shape": [256, 256, 256],
                 "displacement_field_inversion": {
                     "forward_fixed_point_solver": {
                         "stop_criterion": {
@@ -103,7 +116,7 @@
                 }
             },
             "training": {
-                "n_epochs": 4,
+                "n_epochs": 15,
                 "optimizer": {
                     "learning_rate": 1e-4,
                     "betas": [0.9, 0.999]
@@ -128,7 +141,8 @@
                                 "weight": 1.0
                             }
                         ]
-                    ]
+                    ],
+                    "regularize_with_affine": false
                 }
             }
         }

@@ -13,18 +13,22 @@ from urllib.error import HTTPError
 from numpy import ones as np_ones
 from numpy.ma import masked_invalid as np_masked_invalid
 from surface_distance import compute_robust_hausdorff, compute_surface_distances  # type: ignore
-from torch import Generator, Tensor, as_tensor
+from torch import Generator, Tensor, as_tensor, cat, float32
 from torch import bool as torch_bool
-from torch import zeros
+from torch import device as torch_device
+from torch import float64, rand, zeros
 from torch.nn.functional import avg_pool3d
 from torch.utils.data import DataLoader, Dataset
 
 from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs, as_displacement_field
+from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
+from algorithm.composable_mapping.masked_tensor import MaskedTensor
 from algorithm.dense_deformation import generate_voxel_coordinate_grid
 from algorithm.everywhere_differentiable_determinant import calculate_determinant
 from algorithm.finite_difference import estimate_spatial_jacobian_matrices
 from algorithm.interpolator import LinearInterpolator, NearestInterpolator
+from algorithm.spatial_derivatives import estimate_spatial_derivatives
 from data.interface import (
     IDataDownloader,
     IEvaluator,
@@ -36,7 +40,6 @@ from data.interface import (
     VolumetricDataArgs,
 )
 from util.metrics import ISummarizer, LastSummarizer, MeanSummarizer, StdSummarizer
-
 
 logger = getLogger()
 
@@ -410,6 +413,9 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         source_name: str,
         target_temp_storage_factory: IStorageFactory,
         target_name: str,
+        n_jacobian_samples: int | None = None,
+        jacobian_sampling_seed: int | None = None,
+        evaluation_prefix: str = "",
     ) -> None:
         super().__init__()
         self._metrics_to_compute = metrics_to_compute
@@ -419,6 +425,9 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         self._source_name = source_name
         self._target_temp_storage_factory = target_temp_storage_factory
         self._target_name = target_name
+        self._n_jacobian_samples = n_jacobian_samples
+        self._jacobian_sampling_seed = jacobian_sampling_seed
+        self._evaluation_prefix = evaluation_prefix
 
     @property
     @abstractmethod
@@ -426,6 +435,7 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         """Get names to indices of the segmentation mask"""
 
     def __call__(self, inference_outputs: Mapping[str, Any]) -> Mapping[str, float]:
+        device: torch_device | None = None
         metrics: dict[str, int | float] = {}
         evaluation_temp_folder = environ.get("EVALUATION_TEMP_FOLDER")
         if evaluation_temp_folder is not None:
@@ -441,6 +451,7 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
             inference_outputs["forward_displacement_field"]
         ):
             if forward_displacement_field is not None:
+                device = forward_displacement_field.device
                 transformed_source_mask_seg = self._transform_mask(
                     mask=self._source_mask_seg,
                     displacement_field=forward_displacement_field,
@@ -457,19 +468,20 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
                     self._compute_segmentation_metrics(
                         mask_1_seg=transformed_source_mask_seg,
                         mask_2_seg=self._target_mask_seg,
-                        prefix=f"input_order_{index}_forward_",
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_forward_",
                     )
                 )
                 metrics.update(
                     self._compute_determinant_metrics(
                         displacement_field=forward_displacement_field,
-                        prefix=f"input_order_{index}_forward_",
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_forward_",
                     )
                 )
         for index, inverse_displacement_field in enumerate(
             inference_outputs["inverse_displacement_field"]
         ):
             if inverse_displacement_field is not None:
+                device = inverse_displacement_field.device
                 transformed_target_mask_seg = self._transform_mask(
                     mask=self._target_mask_seg,
                     displacement_field=inverse_displacement_field,
@@ -485,13 +497,13 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
                     self._compute_segmentation_metrics(
                         mask_1_seg=transformed_target_mask_seg,
                         mask_2_seg=self._source_mask_seg,
-                        prefix=f"input_order_{index}_inverse_",
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_inverse_",
                     )
                 )
                 metrics.update(
                     self._compute_determinant_metrics(
                         displacement_field=inverse_displacement_field,
-                        prefix=f"input_order_{index}_inverse_",
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_inverse_",
                     )
                 )
         for index_0, index_1 in product(
@@ -510,7 +522,7 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
                         inverse_displacement_field=inference_outputs["inverse_displacement_field"][
                             index_1
                         ],
-                        prefix=f"input_orders_{index_0}_{index_1}_",
+                        prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_",
                     )
                 )
                 metrics.update(
@@ -521,9 +533,41 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
                         inverse_displacement_field=inference_outputs["forward_displacement_field"][
                             index_0
                         ],
-                        prefix=f"input_orders_{index_0}_{index_1}_reverse_",
+                        prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_reverse_",
                     )
                 )
+        if "forward_mapping" in inference_outputs:
+            for index, (mapping, coordinate_system) in enumerate(
+                zip(
+                    inference_outputs["forward_mapping"],
+                    inference_outputs["mapping_coordinate_system"],
+                )
+            ):
+                if mapping is not None:
+                    metrics.update(
+                        self._compute_sampled_determinant_metrics(
+                            mapping=mapping,
+                            coordinate_system=coordinate_system,
+                            prefix=f"{self._evaluation_prefix}input_order_{index}_sampled_forward_",
+                            device=device,
+                        )
+                    )
+        if "inverse_mapping" in inference_outputs:
+            for index, (mapping, coordinate_system) in enumerate(
+                zip(
+                    inference_outputs["inverse_mapping"],
+                    inference_outputs["mapping_coordinate_system"],
+                )
+            ):
+                if mapping is not None:
+                    metrics.update(
+                        self._compute_sampled_determinant_metrics(
+                            mapping=mapping,
+                            coordinate_system=coordinate_system,
+                            prefix=f"{self._evaluation_prefix}input_order_{index}_sampled_inverse_",
+                            device=device,
+                        )
+                    )
         return super().__call__(inference_outputs) | metrics
 
     def _compute_segmentation_metrics(
@@ -698,6 +742,56 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
             f"{prefix}proportion_negative_determinants_central": n_negative_determinants_central
             / n_voxels,
             f"{prefix}det_std_central": det_std_central,
+        }
+
+    def _compute_sampled_determinant_metrics(
+        self,
+        mapping: IComposableMapping,
+        coordinate_system: VoxelCoordinateSystem,
+        prefix: str,
+        device: torch_device | None,
+    ) -> dict[str, int | float]:
+        if "sampled_determinant" not in self._metrics_to_compute:
+            return {}
+        if self._n_jacobian_samples is None or self._jacobian_sampling_seed is None:
+            raise ValueError(
+                "Number of Jacobian samples and Jacobian sampling seed "
+                "is required for sampled determinant metrics."
+            )
+        mapping = mapping.to_dtype(float64)
+        n_dims = len(coordinate_system.grid_spacing)
+        grid = coordinate_system.grid.generate_values(device=device, dtype=float32)
+        bounds = cat(
+            [
+                grid.amin(dim=list(range(2, grid.ndim))),
+                grid.amax(dim=list(range(2, grid.ndim))),
+            ],
+            dim=0,
+        ).to(float64)
+        generator = Generator(device=device).manual_seed(self._jacobian_sampling_seed)
+        evaluation_points = (
+            rand(
+                size=(1, self._n_jacobian_samples, n_dims),
+                device=device,
+                dtype=float64,
+                generator=generator,
+            )
+            * (bounds[1] - bounds[0])
+            + bounds[0]
+        ).permute((0, 2, 1))
+        jacobian_matrices = estimate_spatial_derivatives(
+            mapping=lambda x: mapping(MaskedTensor(x)).generate_values(),
+            points=evaluation_points,
+            perturbation=coordinate_system.grid_spacing[0] * 1e-7,
+        )
+        determinants = calculate_determinant(jacobian_matrices)
+        n_neg_det = int((determinants < 0).sum())
+        det_std = float(determinants.std())
+        n_voxels = int(evaluation_points.size(2))
+        return {
+            f"{prefix}n_negative_determinants": n_neg_det,
+            f"{prefix}proportion_negative_determinants": (n_neg_det / n_voxels),
+            f"{prefix}det_std": det_std,
         }
 
     @staticmethod

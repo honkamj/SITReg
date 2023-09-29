@@ -10,7 +10,8 @@ from threading import Thread
 from typing import Any, Iterable, Mapping, Optional, Protocol, Sequence, Sized
 
 from torch import device as torch_device
-from torch.distributed import init_process_group, destroy_process_group, Backend
+from torch import set_default_dtype
+from torch.distributed import Backend, destroy_process_group, init_process_group
 from torch.multiprocessing import spawn
 from tqdm import tqdm  # type: ignore
 
@@ -29,16 +30,16 @@ from scripts.file_names import (
 from util.checkpoint import load_states, save_states
 from util.device import get_device_name
 from util.git import get_commit_hash
+from util.import_util import import_object
 from util.json import load_json
-from util.logging import configure_logging_for_subprocess, configure_logging
+from util.logging import configure_logging, configure_logging_for_subprocess
 from util.metrics import LossAverager
 
 logger = getLogger(__name__)
 
 
-class SizedIterable(Sized, Iterable, Protocol): # pylint: disable=abstract-method
+class SizedIterable(Sized, Iterable, Protocol):  # pylint: disable=abstract-method
     """Sized iterable"""
-
 
 
 def _save_states(
@@ -82,7 +83,7 @@ def _init_process_group(
 
 
 def _truncate(string: str, width: int):
-    return string[:width-3] + '...' if len(string) > width else string
+    return string[: width - 3] + "..." if len(string) > width else string
 
 
 def _train(
@@ -159,14 +160,13 @@ def _train(
                 if data_tqdm is not None:
                     data_tqdm.set_description(_truncate(str(loss_averager), 80))
                 logger.info(
-                    "Epoch %d / %d, step  %d / %d, epoch average losses: %s, "
-                    "batch losses: %s",
+                    "Epoch %d / %d, step  %d / %d, epoch average losses: %s, batch losses: %s",
                     epoch + 1,
                     training_definition.n_epochs,
                     step + 1,
                     n_steps,
                     loss_averager,
-                    loss_averager.losses_as_string(loss_dict)
+                    loss_averager.losses_as_string(loss_dict),
                 )
         except KeyboardInterrupt:
             training_definition.before_save(saving_process_rank=0)
@@ -227,6 +227,7 @@ def _main() -> None:
     else:
         config_path = args.config
     config = load_json(config_path)
+    set_default_dtype(import_object(config.get("dtype", "torch.float32")))
     makedirs(target_dir, exist_ok=True)
     if args.continue_from_epoch is None:
         continue_from_epoch = find_largest_epoch(target_dir, require_optimizer=True)

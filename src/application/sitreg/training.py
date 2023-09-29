@@ -81,7 +81,9 @@ class SITRegTraining(BaseTrainingDefinition):
         self._regularize_with_affine = loss_config.get("regularize_with_affine", True)
         self._average_pool = avg_pool_nd_function(len(application_config["model"]["input_shape"]))
 
-    def update_weights(self, batch: tuple[Tensor, Tensor]) -> Mapping[str, float]:
+    def update_weights(
+        self, batch: tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]
+    ) -> Mapping[str, float]:
         (image_1, image_1_mask), (image_2, image_2_mask) = batch
         image_1 = image_1.to(self._device)
         image_1_mask = image_1_mask.to(self._device)
