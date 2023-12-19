@@ -9,7 +9,7 @@ from torch import device as torch_device
 from torch import diag, diagonal
 from torch import dtype as torch_dtype
 from torch import int32 as torch_int32
-from torch import ones, remainder
+from torch import ones
 from torch import round as torch_round
 from torch import tensor
 
@@ -45,7 +45,9 @@ class MaskedTensor(IMaskedTensor):
         self._mask = mask
         self._n_channel_dims = n_channel_dims
         first_channel_dim = index_by_channel_dims(values.ndim, 0, n_channel_dims)
-        self._channels_shape = values.shape[first_channel_dim : first_channel_dim + n_channel_dims]
+        self._channels_shape = values.shape[
+            first_channel_dim : first_channel_dim + n_channel_dims
+        ]
         self._affine_transformation: IAffineTransformation = (
             Identity(self._channels_shape[0])
             if affine_transformation is None
@@ -82,7 +84,9 @@ class MaskedTensor(IMaskedTensor):
             values=kwargs["values"] if "values" in kwargs else self._values,
             mask=kwargs["mask"] if "mask" in kwargs else self._mask,
             n_channel_dims=(
-                kwargs["n_channel_dims"] if "n_channel_dims" in kwargs else self._n_channel_dims
+                kwargs["n_channel_dims"]
+                if "n_channel_dims" in kwargs
+                else self._n_channel_dims
             ),
             affine_transformation=(
                 kwargs["affine_transformation"]
@@ -91,9 +95,13 @@ class MaskedTensor(IMaskedTensor):
             ),
         )
 
-    def apply_affine(self, affine_transformation: IAffineTransformation) -> "MaskedTensor":
+    def apply_affine(
+        self, affine_transformation: IAffineTransformation
+    ) -> "MaskedTensor":
         return self.modified_copy(
-            affine_transformation=affine_transformation.compose_affine(self._affine_transformation)
+            affine_transformation=affine_transformation.compose_affine(
+                self._affine_transformation
+            )
         )
 
     @property
@@ -145,7 +153,9 @@ class _CachedMaskedTensor(IMaskedTensor):
         cached._affine_transformation = affine_transformation
         cached._values_cache = values_cache
         cached._mask_cache = (
-            TensorCache(cached._generate_full_mask) if mask_cache is None else mask_cache
+            TensorCache(cached._generate_full_mask)
+            if mask_cache is None
+            else mask_cache
         )
         return cached
 
@@ -180,16 +190,22 @@ class _CachedMaskedTensor(IMaskedTensor):
     ) -> Tensor:
         if device is None or dtype is None:
             raise RuntimeError("Device and dtype are needed!")
-        return self._affine_transformation(self._values_cache.get(device=device, dtype=dtype))
+        return self._affine_transformation(
+            self._values_cache.get(device=device, dtype=dtype)
+        )
 
     @property
     def channels_shape(self) -> Sequence[int]:
         return self._masked_tensor.channels_shape
 
-    def apply_affine(self, affine_transformation: IAffineTransformation) -> "_CachedMaskedTensor":
+    def apply_affine(
+        self, affine_transformation: IAffineTransformation
+    ) -> "_CachedMaskedTensor":
         return self._create_with_existing_cache(
             masked_tensor=self._masked_tensor,
-            affine_transformation=affine_transformation.compose_affine(self._affine_transformation),
+            affine_transformation=affine_transformation.compose_affine(
+                self._affine_transformation
+            ),
             values_cache=self._values_cache,
             mask_cache=self._mask_cache,
         )
@@ -220,6 +236,8 @@ class _CachedMaskedTensor(IMaskedTensor):
 class BaseVoxelCoordinateGrid(IRegularGridTensor):
     """Base implementation for voxel coordinate grid"""
 
+    REDUCE_TO_SLICE_TOL = 1e-5
+
     def cache(self) -> "_CachedVoxelCoordinateGrid":
         return _CachedVoxelCoordinateGrid(self)
 
@@ -234,12 +252,17 @@ class BaseVoxelCoordinateGrid(IRegularGridTensor):
         if transformation_matrix.ndim != 2:
             return None
         scale = diagonal(transformation_matrix[:-1, :-1])
-        if not allclose(diag(scale), transformation_matrix[:-1, :-1], atol=1e-6):
+        if not allclose(
+            diag(scale), transformation_matrix[:-1, :-1], atol=self.REDUCE_TO_SLICE_TOL
+        ):
             return None
         translation = transformation_matrix[:-1, -1]
-        zero_tensor = tensor(0.0, dtype=transformation_matrix.dtype)
-        if torch_any(translation < 0) or not allclose(
-            remainder(translation, 1), zero_tensor, atol=1e-6
+        if (
+            torch_any(translation < -self.REDUCE_TO_SLICE_TOL)
+            or not allclose(
+                translation.round(), translation, atol=self.REDUCE_TO_SLICE_TOL
+            )
+            or not allclose(scale.round(), scale, atol=self.REDUCE_TO_SLICE_TOL)
         ):
             return None
         scale = torch_round(scale).type(torch_int32)
@@ -251,7 +274,9 @@ class BaseVoxelCoordinateGrid(IRegularGridTensor):
             return None
         return (...,) + tuple(
             slice(int(slice_start), int(slice_end), int(step_size))
-            for (slice_start, slice_end, step_size) in zip(translation, slice_ends, scale)
+            for (slice_start, slice_end, step_size) in zip(
+                translation, slice_ends, scale
+            )
         )
 
 
@@ -259,11 +284,15 @@ class VoxelCoordinateGrid(BaseVoxelCoordinateGrid):
     """Voxel coordinate grid (possibly transformed)"""
 
     def __init__(
-        self, shape: Sequence[int], affine_transformation: Optional[IAffineTransformation] = None
+        self,
+        shape: Sequence[int],
+        affine_transformation: Optional[IAffineTransformation] = None,
     ) -> None:
         self._shape = shape
         self._affine_transformation: IAffineTransformation = (
-            Identity(len(self._shape)) if affine_transformation is None else affine_transformation
+            Identity(len(self._shape))
+            if affine_transformation is None
+            else affine_transformation
         )
 
     @property
@@ -276,7 +305,9 @@ class VoxelCoordinateGrid(BaseVoxelCoordinateGrid):
         if device is None:
             raise RuntimeError("Device is needed!")
         return ones(
-            reduce_channel_shape_to_ones((1, 1) + tuple(self._shape), 1), device=device, dtype=dtype
+            reduce_channel_shape_to_ones((1, 1) + tuple(self._shape), 1),
+            device=device,
+            dtype=dtype,
         )
 
     def generate_values(
@@ -288,9 +319,13 @@ class VoxelCoordinateGrid(BaseVoxelCoordinateGrid):
             generate_voxel_coordinate_grid(self._shape, device, dtype=dtype)
         )
 
-    def apply_affine(self, affine_transformation: IAffineTransformation) -> "VoxelCoordinateGrid":
+    def apply_affine(
+        self, affine_transformation: IAffineTransformation
+    ) -> "VoxelCoordinateGrid":
         return self.modified_copy(
-            affine_transformation=affine_transformation.compose_affine(self._affine_transformation)
+            affine_transformation=affine_transformation.compose_affine(
+                self._affine_transformation
+            )
         )
 
     @property
@@ -308,7 +343,9 @@ class VoxelCoordinateGrid(BaseVoxelCoordinateGrid):
         """Create modified copy"""
         return VoxelCoordinateGrid(
             self._shape if shape is None else shape,
-            self._affine_transformation if affine_transformation is None else affine_transformation,
+            self._affine_transformation
+            if affine_transformation is None
+            else affine_transformation,
         )
 
     def get_cpu_affine(self) -> Optional[ICPUComposableAffineTransformation]:
@@ -340,7 +377,9 @@ class _CachedVoxelCoordinateGrid(BaseVoxelCoordinateGrid, _CachedMaskedTensor):
     ) -> "_CachedVoxelCoordinateGrid":
         return self._create_with_existing_cache(
             masked_tensor=self._masked_tensor,
-            affine_transformation=affine_transformation.compose_affine(self._affine_transformation),
+            affine_transformation=affine_transformation.compose_affine(
+                self._affine_transformation
+            ),
             values_cache=self._values_cache,
             mask_cache=self._mask_cache,
         )

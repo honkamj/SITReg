@@ -37,6 +37,7 @@ def fixed_point_invert_displacement_field(
     displacement_field: Tensor,
     arguments: DisplacementFieldInversionArguments,
     initial_guess: Optional[Tensor] = None,
+    coordinates: Optional[Tensor] = None,
 ) -> Tensor:
     """Fixed point invert displacement field
 
@@ -44,8 +45,11 @@ def fixed_point_invert_displacement_field(
         displacement_field: Displacement field to invert
         arguments: Arguments for fixed point inversion
         initial_guess: Initial guess for inverted displacement field
+        coordinates: Voxel coordinates at which to invert (usually given as a grid)
     """
-    return _FixedPointInvertDisplacementField.apply(displacement_field, arguments, initial_guess)
+    return _FixedPointInvertDisplacementField.apply(
+        displacement_field, arguments, initial_guess, coordinates
+    )
 
 
 class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-method
@@ -56,11 +60,11 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
         inverted_displacement_field: Tensor,
         displacement_field: Tensor,
         interpolator: IInterpolator,
-        voxel_coordinate_grid: Tensor,
+        coordinates: Tensor,
     ) -> Tensor:
         return -interpolator(
             volume=displacement_field,
-            coordinates=voxel_coordinate_grid + inverted_displacement_field,
+            coordinates=coordinates + inverted_displacement_field,
         )
 
     @staticmethod
@@ -69,13 +73,13 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
         out: Tensor,
         displacement_field: Tensor,
         interpolator: IInterpolator,
-        voxel_coordinate_grid: Tensor,
+        coordinates: Tensor,
     ) -> None:
         out[:] = _FixedPointInvertDisplacementField._forward_fixed_point_iteration_step(
             inverted_displacement_field=inverted_displacement_field,
             displacement_field=displacement_field,
             interpolator=interpolator,
-            voxel_coordinate_grid=voxel_coordinate_grid,
+            coordinates=coordinates,
         )
 
     @staticmethod
@@ -102,42 +106,76 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
         displacement_field: Tensor,
         arguments: DisplacementFieldInversionArguments,
         initial_guess: Optional[Tensor],
+        coordinates: Optional[Tensor],
     ):
         dtype = (
-            displacement_field.dtype if arguments.forward_dtype is None else arguments.forward_dtype
+            displacement_field.dtype
+            if arguments.forward_dtype is None
+            else arguments.forward_dtype
         )
-        type_converted_displacement_field = displacement_field.to(dtype)
+        type_converted_displacement_field = displacement_field.to(dtype=dtype)
+        if coordinates is None:
+            type_converted_coordinates = generate_voxel_coordinate_grid(
+                displacement_field.shape[2:], displacement_field.device, dtype=dtype
+            )
+        elif displacement_field.dtype != coordinates.dtype:
+            raise ValueError(
+                f'DType {coordinates.dtype} of input "coordinates" does not match '
+                f'DType {displacement_field.dtype} of input "displacement_field"'
+            )
+        else:
+            type_converted_coordinates = coordinates.to(dtype=dtype)
+        if initial_guess is None and coordinates is None:
+            type_converted_initial_guess = -type_converted_displacement_field
+        elif initial_guess is None:
+            type_converted_initial_guess = zeros_like(type_converted_coordinates)
+        elif displacement_field.dtype != initial_guess.dtype:
+            raise ValueError(
+                f'DType {initial_guess.dtype} of input "initial_guess" does not match '
+                f'DType {displacement_field.dtype} of input "displacement_field"'
+            )
+        else:
+            type_converted_initial_guess = initial_guess.to(dtype=dtype)
         inverted_displacement_field = arguments.forward_solver.solve(
             partial(
                 _FixedPointInvertDisplacementField._forward_fixed_point_mapping,
                 displacement_field=type_converted_displacement_field,
-                voxel_coordinate_grid=generate_voxel_coordinate_grid(
-                    displacement_field.shape[2:], displacement_field.device, dtype=dtype
-                ),
+                coordinates=type_converted_coordinates,
                 interpolator=arguments.interpolator,
             ),
-            initial_value=(
-                -type_converted_displacement_field if initial_guess is None else initial_guess
-            ),
+            initial_value=type_converted_initial_guess,
         ).to(displacement_field.dtype)
-        grad_needed, _, _ = ctx.needs_input_grad  # type: ignore
-        if grad_needed:
-            ctx.save_for_backward(displacement_field, inverted_displacement_field)
+        (
+            displacement_field_grad_needed,
+            _,
+            _,
+            coordinates_grad_needed,
+        ) = ctx.needs_input_grad  # type: ignore
+        if displacement_field_grad_needed or coordinates_grad_needed:
+            tensors_to_save = [displacement_field, inverted_displacement_field]
+            if coordinates is not None:
+                tensors_to_save.append(coordinates)
+            ctx.save_for_backward(*tensors_to_save)
             ctx.arguments = arguments  # type: ignore
             ctx.dtype = dtype  # type: ignore
+            ctx.has_coordinates = coordinates is not None  # type: ignore
         return inverted_displacement_field
 
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output: Tensor):  # type: ignore # pylint: disable=arguments-differ
-        grad_needed, _, _ = ctx.needs_input_grad
-        if grad_needed:
-            displacement_field: Tensor
-            inverted_displacement_field: Tensor
-            (
-                displacement_field,
-                inverted_displacement_field,
-            ) = ctx.saved_tensors
+        (
+            displacement_field_grad_needed,
+            _,
+            _,
+            coordinates_grad_needed,
+        ) = ctx.needs_input_grad
+        if displacement_field_grad_needed or coordinates_grad_needed:
+            displacement_field: Tensor = ctx.saved_tensors[0]
+            inverted_displacement_field: Tensor = ctx.saved_tensors[1]
+            coordinates: Tensor | None = (
+                ctx.saved_tensors[2] if ctx.has_coordinates else None
+            )
             arguments: DisplacementFieldInversionArguments = ctx.arguments
             del ctx
             dtype = (
@@ -147,24 +185,26 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
             )
             original_dtype = displacement_field.dtype
             displacement_field = displacement_field.to(dtype).detach()
+            if coordinates is None:
+                coordinates = generate_voxel_coordinate_grid(
+                    displacement_field.shape[2:], displacement_field.device, dtype=dtype
+                )
+            else:
+                coordinates = coordinates.to(dtype=dtype)
             inverted_displacement_field = inverted_displacement_field.to(dtype).detach()
             grad_output = grad_output.to(dtype)
             if arguments.backward_solver is None:
                 raise RuntimeError("Backward solver not specified!")
             with enable_grad():
-                displacement_field.requires_grad_(True)
+                displacement_field.requires_grad_(displacement_field_grad_needed)
+                coordinates.requires_grad_(coordinates_grad_needed)
                 inverted_displacement_field.requires_grad_(True)
-                forward_fixed_point_output = (
-                    _FixedPointInvertDisplacementField._forward_fixed_point_iteration_step(
-                        inverted_displacement_field=inverted_displacement_field,
-                        displacement_field=displacement_field,
-                        interpolator=arguments.interpolator,
-                        voxel_coordinate_grid=generate_voxel_coordinate_grid(
-                            displacement_field.shape[2:], displacement_field.device, dtype=dtype
-                        ),
-                    )
+                forward_fixed_point_output = _FixedPointInvertDisplacementField._forward_fixed_point_iteration_step(
+                    inverted_displacement_field=inverted_displacement_field,
+                    displacement_field=displacement_field,
+                    interpolator=arguments.interpolator,
+                    coordinates=coordinates,
                 )
-                displacement_field.requires_grad_(False)
                 fixed_point_solved_gradient = arguments.backward_solver.solve(
                     partial(
                         _FixedPointInvertDisplacementField._backward_fixed_point_mapping,
@@ -172,15 +212,33 @@ class _FixedPointInvertDisplacementField(Function):  # pylint: disable=abstract-
                         forward_fixed_point_output=forward_fixed_point_output,
                         grad_output=grad_output,
                     ),
-                    initial_value=zeros_like(grad_output),
+                    initial_value=zeros_like(inverted_displacement_field),
                 )
-                displacement_field.requires_grad_(True)
+                displacement_field.requires_grad_(displacement_field_grad_needed)
+                coordinates.requires_grad_(coordinates_grad_needed)
                 inverted_displacement_field.requires_grad_(False)
+                differentiated_inputs = []
+                if displacement_field_grad_needed:
+                    differentiated_inputs.append(displacement_field)
+                if coordinates_grad_needed:
+                    differentiated_inputs.append(coordinates)
                 output_grad = grad(
                     outputs=forward_fixed_point_output,
-                    inputs=displacement_field,
+                    inputs=differentiated_inputs,
                     grad_outputs=fixed_point_solved_gradient,
                     retain_graph=False,
-                )[0]
-                return output_grad.to(original_dtype), None, None
-        return None, None, None
+                )
+                displacement_field_grad = (
+                    output_grad[0].to(dtype=original_dtype)
+                    if displacement_field_grad_needed
+                    else None
+                )
+                coordinates_grad = (
+                    output_grad[1 if displacement_field_grad_needed else 0].to(
+                        dtype=original_dtype
+                    )
+                    if coordinates_grad_needed
+                    else None
+                )
+                return displacement_field_grad, None, None, coordinates_grad
+        return None, None, None, None

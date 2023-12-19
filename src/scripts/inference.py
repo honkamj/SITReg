@@ -6,6 +6,7 @@ from logging import getLogger
 from multiprocessing import Queue, get_context
 from os import makedirs, remove
 from os.path import isfile, join
+from random import shuffle
 from threading import Thread
 from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
 
@@ -49,6 +50,9 @@ class _InferenceArgs(NamedTuple):
     preload_data: bool
     num_workers: int
     num_dummy_inferences: int
+    shuffle_cases: bool
+    instance_index: int
+    n_instances: int
 
 
 def _load_states(
@@ -206,7 +210,10 @@ def _inference(args: _InferenceArgs) -> None:
         config=args.config, args=InferenceDataArgs(data_root=args.data_root, division=args.division)
     )
     n_cases = len(inference_data_factory)
-    case_indeces = range(n_cases)
+    case_indices = list(range(n_cases))
+    case_indices = case_indices[args.instance_index::args.n_instances]
+    if args.shuffle_cases:
+        shuffle(case_indices)
     evaluation_listening_args = (
         _EvaluationListeningArgs(
             inference_data_factory=inference_data_factory,
@@ -215,7 +222,7 @@ def _inference(args: _InferenceArgs) -> None:
                 args.target_dir, metrics_file_name(args.inference_folder, args.division)
             ),
         )
-        if args.evaluate
+        if args.evaluate and args.n_instances == 1
         else None
     )
     inference_result_listener = Thread(
@@ -223,13 +230,13 @@ def _inference(args: _InferenceArgs) -> None:
         args=(
             output_queue,
             case_index_queue,
-            case_indeces[n_inference_processes:],
+            case_indices[n_inference_processes:],
             n_cases,
             evaluation_listening_args,
         ),
     )
     inference_result_listener.start()
-    for case_index in case_indeces[:n_inference_processes]:
+    for case_index in case_indices[:n_inference_processes]:
         case_index_queue.put(case_index)
     use_multiprocessing = n_inference_processes > 1
     try:
@@ -340,6 +347,9 @@ def _main() -> None:
         "--do-not-save-outputs", help="Do not save outputs to disk", action="store_true"
     )
     parser.add_argument(
+        "--shuffle-cases", help="Shuffle cases", action="store_true"
+    )
+    parser.add_argument(
         "--evaluate", help="Perform evaluation of inference outputs", action="store_true"
     )
     parser.add_argument(
@@ -371,6 +381,24 @@ def _main() -> None:
         ),
         type=int,
         default=2,
+    )
+    parser.add_argument(
+        "--instance-index",
+        help=(
+            "If running the inference using multiple instances, define the index of the instance "
+            "with this parameter. No summary will be built if using more than one instance."
+        ),
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        "--n-instances",
+        help=(
+            "If running the inference using multiple instances, define the number of the instances "
+            "with this parameter. No summary will be built if using more than one instance."
+        ),
+        type=int,
+        default=1,
     )
     args = parser.parse_args()
     target_dir = join(args.training_root, args.model_name)
@@ -411,6 +439,9 @@ def _main() -> None:
                 preload_data=args.preload_data,
                 num_workers=args.num_workers,
                 num_dummy_inferences=args.num_dummy_inferences,
+                shuffle_cases=args.shuffle_cases,
+                instance_index=args.instance_index,
+                n_instances=args.n_instances,
             )
         )
 

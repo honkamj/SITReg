@@ -9,15 +9,22 @@ from torch import dtype as torch_dtype
 
 from algorithm.composable_mapping.interface import IComposableMapping
 
-from ..dense_deformation import calculate_mask_at_voxel_coordinates, generate_voxel_coordinate_grid
+from ..dense_deformation import (
+    calculate_mask_at_voxel_coordinates,
+)
 from ..fixed_point_invert_displacement_field import (
     DisplacementFieldInversionArguments,
     fixed_point_invert_displacement_field,
 )
 from ..fixed_point_solver import AndersonSolver
-from ..interface import IFixedPointSolver, IInterpolator
+from ..interface import IInterpolator
 from .base import BaseComposableMapping
-from .interface import IComposableMapping, IMaskedTensor, IRegularGridTensor, VoxelCoordinateSystem
+from .interface import (
+    IComposableMapping,
+    IMaskedTensor,
+    IRegularGridTensor,
+    VoxelCoordinateSystem,
+)
 from .masked_tensor import MaskedTensor
 
 
@@ -102,34 +109,44 @@ class GridVolume(BaseComposableMapping):
         voxel_coordinates = masked_coordinates.generate_values(
             device=self._data.device, dtype=self._data.dtype
         )
-        values, mask = self._interpolate_and_update_mask(voxel_coordinates)
+        values = self._interpolate(voxel_coordinates)
+        mask = self._update_mask(self._mask, voxel_coordinates, masked_coordinates.mask)
+        return MaskedTensor(values, mask, self._n_channel_dims), voxel_coordinates
+
+    def _interpolate(self, voxel_coordinates: Tensor) -> Tensor:
+        values = self._grid_mapping_args.interpolator(self._data, voxel_coordinates)
+        return values
+
+    def _update_mask(
+        self,
+        mask: Tensor | None,
+        voxel_coordinates: Tensor,
+        voxel_coordinates_mask: Tensor | None,
+    ) -> Optional[Tensor]:
+        if mask is not None:
+            mask = self._grid_mapping_args.mask_interpolator(mask, voxel_coordinates)
+            mask = self._threshold_mask(mask)
         if self._grid_mapping_args.mask_outside_fov:
             mask = calculate_mask_at_voxel_coordinates(
                 voxel_coordinates,
                 mask_to_update=mask,
                 volume_shape=self._volume_shape,
-                dtype=values.dtype,
+                dtype=self._data.dtype,
             )
-        if masked_coordinates.has_mask():
+        if voxel_coordinates_mask is not None:
             if mask is None:
-                mask = masked_coordinates.mask
+                mask = voxel_coordinates_mask
             else:
-                mask = masked_coordinates.mask * mask
-        return MaskedTensor(values, mask, self._n_channel_dims), voxel_coordinates
-
-    def _interpolate_and_update_mask(
-        self, voxel_coordinates: Tensor
-    ) -> tuple[Tensor, Optional[Tensor]]:
-        mask = self._mask
-        values = self._grid_mapping_args.interpolator(self._data, voxel_coordinates)
-        if mask is not None:
-            mask = self._grid_mapping_args.mask_interpolator(mask, voxel_coordinates)
-            mask = self._threshold_mask(mask)
-        return values, mask
+                mask = voxel_coordinates_mask * mask
+        return mask
 
     def _threshold_mask(self, mask: Tensor) -> Tensor:
         if self._grid_mapping_args.mask_threshold is not None:
-            return (mask < self._grid_mapping_args.mask_threshold).logical_not().type(mask.dtype)
+            return (
+                (mask < self._grid_mapping_args.mask_threshold)
+                .logical_not()
+                .type(mask.dtype)
+            )
         return mask
 
     def invert(self, **kwargs) -> IComposableMapping:
@@ -185,7 +202,9 @@ class GridCoordinateMapping(GridVolume):
         )
 
     def __call__(self, masked_coordinates: IMaskedTensor) -> IMaskedTensor:
-        displacement_field_values, voxel_coordinates = super()._evaluate(masked_coordinates)
+        displacement_field_values, voxel_coordinates = super()._evaluate(
+            masked_coordinates
+        )
         if voxel_coordinates is None:
             voxel_coordinates = masked_coordinates.generate_values(
                 device=self._data.device, dtype=self._data.dtype
@@ -198,7 +217,7 @@ class GridCoordinateMapping(GridVolume):
             mask=displacement_field_values.mask,
         )
 
-    def invert(self, **inversion_parameters) -> "GridCoordinateMapping":
+    def invert(self, **inversion_parameters) -> "_GridCoordinateMappingInverse":
         """Fixed point invert displacement field
 
         inversion_parameters:
@@ -216,53 +235,22 @@ class GridCoordinateMapping(GridVolume):
             backward_solver = inversion_parameters["backward_fixed_point_solver"]
         else:
             backward_solver = AndersonSolver()
-        inverted_displacement_field, mask = self._invert_displacement_field(
-            forward_solver=forward_solver,
-            backward_solver=backward_solver,
-            initial_guess=inversion_parameters.get("initial_guess"),
-            forward_dtype=inversion_parameters.get("forward_dtype"),
-            backward_dtype=inversion_parameters.get("backward_dtype"),
-        )
-        return GridCoordinateMapping(
-            displacement_field=inverted_displacement_field,
-            grid_mapping_args=self._grid_mapping_args,
-            mask=mask,
-        )
-
-    def _invert_displacement_field(
-        self,
-        forward_solver: IFixedPointSolver,
-        backward_solver: Optional[IFixedPointSolver],
-        initial_guess: Optional[Tensor],
-        forward_dtype: Optional[torch_dtype],
-        backward_dtype: Optional[torch_dtype],
-    ) -> tuple[Tensor, Optional[Tensor]]:
-        inverse_field = fixed_point_invert_displacement_field(
+        return _GridCoordinateMappingInverse(
             displacement_field=self._data,
-            arguments=DisplacementFieldInversionArguments(
+            grid_mapping_args=self._grid_mapping_args,
+            inversion_arguments=DisplacementFieldInversionArguments(
                 interpolator=self._grid_mapping_args.interpolator,
-                forward_solver=AndersonSolver() if forward_solver is None else forward_solver,
-                forward_dtype=forward_dtype,
-                backward_solver=AndersonSolver() if backward_solver is None else backward_solver,
-                backward_dtype=backward_dtype,
+                forward_solver=AndersonSolver()
+                if forward_solver is None
+                else forward_solver,
+                forward_dtype=inversion_parameters.get("forward_dtype"),
+                backward_solver=AndersonSolver()
+                if backward_solver is None
+                else backward_solver,
+                backward_dtype=inversion_parameters.get("backward_dtype"),
             ),
-            initial_guess=initial_guess,
+            mask=self._mask,
         )
-        coordinate_grid = generate_voxel_coordinate_grid(
-            self._volume_shape, self._data.device, dtype=self._data.dtype
-        )
-        inverted_coordinates = coordinate_grid + inverse_field
-        mask = self._mask
-        if mask is not None:
-            mask = self._grid_mapping_args.mask_interpolator(
-                volume=mask, coordinates=coordinate_grid + inverse_field
-            )
-            mask = self._threshold_mask(mask)
-        if self._grid_mapping_args.mask_outside_fov:
-            mask = calculate_mask_at_voxel_coordinates(
-                inverted_coordinates, mask, self._volume_shape, dtype=inverted_coordinates.dtype
-            )
-        return inverse_field, mask
 
     def detach(self) -> "GridCoordinateMapping":
         return GridCoordinateMapping(
@@ -282,6 +270,132 @@ class GridCoordinateMapping(GridVolume):
         return GridCoordinateMapping(
             displacement_field=self._data.to(device=device),
             grid_mapping_args=self._grid_mapping_args,
+            mask=self._mask.to(device=device) if self._mask is not None else None,
+        )
+
+
+class _GridCoordinateMappingInverse(GridVolume):
+    """Continuously defined mapping based on regular grid samples
+
+    Arguments:
+        displacement_field: Displacement field in voxel coordinates, Tensor with shape
+            (batch_size, n_dims, dim_1, ..., dim_{n_dims})
+        grid_mapping_args: Additional grid based mapping args
+        mask: Mask defining invalid regions,
+            Tensor with shape (batch_size, *(1,) * len(channel_dims), dim_1, ..., dim_{n_dims})
+    """
+
+    def __init__(
+        self,
+        displacement_field: Tensor,
+        grid_mapping_args: GridMappingArgs,
+        inversion_arguments: DisplacementFieldInversionArguments,
+        mask: Optional[Tensor] = None,
+    ) -> None:
+        super().__init__(
+            data=displacement_field,
+            grid_mapping_args=grid_mapping_args,
+            mask=mask,
+            n_channel_dims=1,
+        )
+        self._inversion_arguments = inversion_arguments
+
+    def __call__(self, masked_coordinates: IMaskedTensor) -> IMaskedTensor:
+        displacement_field_values, voxel_coordinates = super()._evaluate(
+            masked_coordinates
+        )
+        if voxel_coordinates is None:
+            voxel_coordinates = masked_coordinates.generate_values(
+                device=self._data.device, dtype=self._data.dtype
+            )
+        return MaskedTensor(
+            values=voxel_coordinates
+            + displacement_field_values.generate_values(
+                device=self._data.device, dtype=self._data.dtype
+            ),
+            mask=displacement_field_values.mask,
+        )
+
+    def _evaluate_grid(
+        self, masked_coordinates: IRegularGridTensor
+    ) -> tuple[IMaskedTensor, Tensor]:
+        target_slice = masked_coordinates.reduce_to_slice(self._volume_shape)
+        if target_slice is None:
+            return self._evaluate_and_return_coordinates(masked_coordinates)
+        if self._mask is not None:
+            mask: Optional[Tensor] = self._mask[target_slice]
+        else:
+            mask = None
+        initial_guess = -self._data[target_slice]
+        voxel_coordinates = masked_coordinates.generate_values(
+            device=self._data.device, dtype=self._data.dtype
+        )
+        inverted = fixed_point_invert_displacement_field(
+            displacement_field=self._data,
+            arguments=self._inversion_arguments,
+            initial_guess=initial_guess,
+            coordinates=voxel_coordinates,
+        )
+        mask = self._update_inverse_mask(mask, inverted)
+        return MaskedTensor(inverted, mask, self._n_channel_dims), voxel_coordinates
+
+    def _evaluate_and_return_coordinates(
+        self, masked_coordinates: IMaskedTensor
+    ) -> tuple[IMaskedTensor, Tensor]:
+        voxel_coordinates = masked_coordinates.generate_values(
+            device=self._data.device, dtype=self._data.dtype
+        )
+        mask = self._update_mask(self._mask, voxel_coordinates, masked_coordinates.mask)
+        inverted = fixed_point_invert_displacement_field(
+            displacement_field=self._data,
+            arguments=self._inversion_arguments,
+            initial_guess=None,
+            coordinates=voxel_coordinates,
+        )
+        mask = self._update_inverse_mask(mask, inverted)
+        return MaskedTensor(inverted, mask, self._n_channel_dims), voxel_coordinates
+
+    def _update_inverse_mask(
+        self, mask: Tensor | None, inverted_coordinates: Tensor
+    ) -> Tensor | None:
+        if self._grid_mapping_args.mask_outside_fov:
+            mask = calculate_mask_at_voxel_coordinates(
+                inverted_coordinates,
+                mask,
+                self._volume_shape,
+                dtype=inverted_coordinates.dtype,
+            )
+        return mask
+
+    def invert(self, **_inversion_parameters) -> "GridCoordinateMapping":
+        """Invert inverse"""
+        return GridCoordinateMapping(
+            displacement_field=self._data,
+            grid_mapping_args=self._grid_mapping_args,
+            mask=self._mask,
+        )
+
+    def detach(self) -> "_GridCoordinateMappingInverse":
+        return _GridCoordinateMappingInverse(
+            displacement_field=self._data.detach(),
+            grid_mapping_args=self._grid_mapping_args,
+            inversion_arguments=self._inversion_arguments,
+            mask=self._mask.detach() if self._mask is not None else None,
+        )
+
+    def to_dtype(self, dtype: torch_dtype) -> "_GridCoordinateMappingInverse":
+        return _GridCoordinateMappingInverse(
+            displacement_field=self._data.type(dtype),
+            grid_mapping_args=self._grid_mapping_args,
+            inversion_arguments=self._inversion_arguments,
+            mask=self._mask.type(dtype) if self._mask is not None else None,
+        )
+
+    def to_device(self, device: torch_device) -> "_GridCoordinateMappingInverse":
+        return _GridCoordinateMappingInverse(
+            displacement_field=self._data.to(device=device),
+            grid_mapping_args=self._grid_mapping_args,
+            inversion_arguments=self._inversion_arguments,
             mask=self._mask.to(device=device) if self._mask is not None else None,
         )
 

@@ -17,10 +17,18 @@ from algorithm.affine_transformation import (
     AffineTransformationTypeDefinition,
     calculate_n_parameters,
 )
-from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
+from algorithm.composable_mapping.factory import (
+    ComposableFactory,
+    CoordinateSystemFactory,
+)
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs
-from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
-from algorithm.cubic_b_spline_control_point_upper_bound import compute_max_control_point_value
+from algorithm.composable_mapping.interface import (
+    IComposableMapping,
+    VoxelCoordinateSystem,
+)
+from algorithm.cubic_b_spline_control_point_upper_bound import (
+    compute_max_control_point_value,
+)
 from algorithm.cubic_spline_upsampling import CubicSplineUpsampling
 from algorithm.interface import IFixedPointSolver
 from model.components import ConvolutionBlockNd
@@ -162,11 +170,13 @@ class SITReg(Module):
                 downsampling_factor=transformation_downsampling_factor,
             )
         )
-        self._image_coordinate_system = CoordinateSystemFactory.top_left_aligned_normalized(
-            original_grid_shape=input_shape,
-            voxel_size=input_voxel_size,
-            downsampling_factor=[1.0] * len(input_shape),
-            grid_shape=input_shape,
+        self._image_coordinate_system = (
+            CoordinateSystemFactory.top_left_aligned_normalized(
+                original_grid_shape=input_shape,
+                voxel_size=input_voxel_size,
+                downsampling_factor=[1.0] * len(input_shape),
+                grid_shape=input_shape,
+            )
         )
         feature_downsampling_factors = feature_extractor.get_downsampling_factors(
             transformation_downsampling_factor
@@ -176,7 +186,9 @@ class SITReg(Module):
                 n_input_features=feature_shape[0],
                 n_features=n_transformation_features,
                 n_convolutions=n_transformation_convolutions,
-                upsampling_factor=self._downsampling_factor_to_integer(upsampling_factor),
+                upsampling_factor=self._downsampling_factor_to_integer(
+                    upsampling_factor
+                ),
                 transformation_shape=transformation_shape,
                 transformation_coordinate_system=self._transformation_coordinate_system,
                 transformation_mapping_args=transformation_mapping_args,
@@ -202,7 +214,11 @@ class SITReg(Module):
             )
         ]
         self._not_none_dense_extration_networks = ModuleList(
-            [network for network in self._dense_extraction_networks if network is not None]
+            [
+                network
+                for network in self._dense_extraction_networks
+                if network is not None
+            ]
         )
         self._volume_mapping_args = volume_mapping_args
         self._transformation_mapping_args = transformation_mapping_args
@@ -237,7 +253,9 @@ class SITReg(Module):
         return self._output_downsampling_factors
 
     @staticmethod
-    def _downsampling_factor_to_integer(downsampling_factor: Sequence[float]) -> Sequence[int]:
+    def _downsampling_factor_to_integer(
+        downsampling_factor: Sequence[float],
+    ) -> Sequence[int]:
         int_downsampling_factor = []
         for dim_downsampling_factor in downsampling_factor:
             if not dim_downsampling_factor.is_integer():
@@ -249,7 +267,10 @@ class SITReg(Module):
         self, batch_combined_features: Tensor
     ) -> tuple[IComposableMapping, IComposableMapping]:
         if self._affine_extraction_network is None:
-            return ComposableFactory.create_identity(), ComposableFactory.create_identity()
+            return (
+                ComposableFactory.create_identity(),
+                ComposableFactory.create_identity(),
+            )
         logger.debug("Starting affine transformation extraction")
         features_1, features_2 = chunk(batch_combined_features, 2)
         return self._affine_extraction_network(features_1, features_2)
@@ -300,7 +321,7 @@ class SITReg(Module):
         image_1: Tensor,
         image_2: Tensor,
         mappings_for_levels: Sequence[tuple[int, bool]] = ((0, True),),
-        resample_when_composing: bool = True
+        resample_when_composing: bool = True,
     ) -> list[MappingPair]:
         """Generate deformations
 
@@ -326,7 +347,9 @@ class SITReg(Module):
         batch_combined_inputs = cat((image_1, image_2), dim=0)
         batch_combined_features_list = self._feature_extractor(batch_combined_inputs)
         predict_affine = self._affine_extraction_network is not None
-        forward_affine, inverse_affine = self._extract_affine(batch_combined_features_list[-1])
+        forward_affine, inverse_affine = self._extract_affine(
+            batch_combined_features_list[-1]
+        )
         mapping_builder = _MappingBuilder(
             forward_affine=forward_affine,
             inverse_affine=inverse_affine,
@@ -385,7 +408,9 @@ class SITReg(Module):
                     dense_extraction_network=dense_extraction_network,
                 )
                 mapping_builder.update(
-                    forward_dense=forward_dense, inverse_dense=inverse_dense, device=device
+                    forward_dense=forward_dense,
+                    inverse_dense=inverse_dense,
+                    device=device,
                 )
             level_index = self._to_level_index(low_first_level_index)
             for include_affine in (False, True):
@@ -407,11 +432,15 @@ class _BaseTransformationExtractionNetwork(Module):
     """Base class for generating exactly inverse consistent transformations"""
 
     @abstractmethod
-    def _extract_atomic_transformation(self, combined_input: Tensor) -> IComposableMapping:
+    def _extract_atomic_transformation(
+        self, combined_input: Tensor
+    ) -> IComposableMapping:
         """Extract the smallest unit transformation"""
 
     @abstractmethod
-    def _invert_mapping(self, mapping: IComposableMapping) -> IComposableMapping:
+    def _invert_mapping(
+        self, mapping: IComposableMapping, device: torch_device
+    ) -> IComposableMapping:
         """Invert transformation"""
 
     def _modify_input(self, input_tensor: Tensor) -> Tensor:
@@ -423,10 +452,12 @@ class _BaseTransformationExtractionNetwork(Module):
         input_1_modified = self._modify_input(features_1)
         input_2_modified = self._modify_input(features_2)
         forward_combined_input = cat(
-            (input_1_modified - input_2_modified, input_1_modified + input_2_modified), dim=1
+            (input_1_modified - input_2_modified, input_1_modified + input_2_modified),
+            dim=1,
         )
         reverse_combined_input = cat(
-            (input_2_modified - input_1_modified, input_1_modified + input_2_modified), dim=1
+            (input_2_modified - input_1_modified, input_1_modified + input_2_modified),
+            dim=1,
         )
         forward_atomic = self._extract_atomic_transformation(forward_combined_input)
         reverse_atomic = self._extract_atomic_transformation(reverse_combined_input)
@@ -449,8 +480,9 @@ class _BaseTransformationExtractionNetwork(Module):
         forward_atomic, reverse_atomic = self._extract_atomic_transformations(
             features_1=features_1, features_2=features_2
         )
-        inverse_forward_atomic = self._invert_mapping(forward_atomic)
-        inverse_reverse_atomic = self._invert_mapping(reverse_atomic)
+        device = features_1.device
+        inverse_forward_atomic = self._invert_mapping(forward_atomic, device=device)
+        inverse_reverse_atomic = self._invert_mapping(reverse_atomic, device=device)
         forward_transformation = forward_atomic.compose(inverse_reverse_atomic)
         inverse_transformation = reverse_atomic.compose(inverse_forward_atomic)
         return forward_transformation, inverse_transformation
@@ -470,12 +502,18 @@ class _AffineExtractionNetwork(_BaseTransformationExtractionNetwork):
         n_affine_parameters = calculate_n_parameters(n_dims, affine_transformation_type)
         self._affine_transformation_type = affine_transformation_type
         self._activation = activation
-        self._linear_1 = Linear(n_affine_extraction_dimensions, n_affine_extraction_dimensions)
-        self._linear_2 = Linear(n_affine_extraction_dimensions, n_affine_extraction_dimensions)
+        self._linear_1 = Linear(
+            n_affine_extraction_dimensions, n_affine_extraction_dimensions
+        )
+        self._linear_2 = Linear(
+            n_affine_extraction_dimensions, n_affine_extraction_dimensions
+        )
         self._final_linear = Linear(n_affine_extraction_dimensions, n_affine_parameters)
         self._n_dims = n_dims
 
-    def _extract_atomic_transformation(self, combined_input: Tensor) -> IComposableMapping:
+    def _extract_atomic_transformation(
+        self, combined_input: Tensor
+    ) -> IComposableMapping:
         output = self._activation(self._linear_1(combined_input))
         output = self._activation(self._linear_2(output))
         output = self._final_linear(output)
@@ -486,7 +524,9 @@ class _AffineExtractionNetwork(_BaseTransformationExtractionNetwork):
     def _modify_input(self, input_tensor: Tensor) -> Tensor:
         return input_tensor.view(input_tensor.size(0), -1)
 
-    def _invert_mapping(self, mapping: IComposableMapping) -> IComposableMapping:
+    def _invert_mapping(
+        self, mapping: IComposableMapping, device: torch_device
+    ) -> IComposableMapping:
         return mapping.invert()
 
 
@@ -522,7 +562,8 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         self._forward_fixed_point_solver = forward_fixed_point_solver
         self._backward_fixed_point_solver = backward_fixed_point_solver
         self._cropping_tuple = (...,) + tuple(
-            slice(None, transformation_dim_size) for transformation_dim_size in transformation_shape
+            slice(None, transformation_dim_size)
+            for transformation_dim_size in transformation_shape
         )
         self._upsampler = CubicSplineUpsampling(upsampling_factor)
         self._upsampling_factor = upsampling_factor
@@ -580,7 +621,9 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         output = self._final_conv(output)
         output = self._max_control_point_value * tanh(output)
         upsampling_factor_tensor = tensor(
-            self._upsampling_factor, device=combined_input.device, dtype=combined_input.dtype
+            self._upsampling_factor,
+            device=combined_input.device,
+            dtype=combined_input.dtype,
         ).view(-1, *(1,) * self._n_dims)
         upsampled_output = (
             self._upsampler(output, apply_prefiltering=False)[self._cropping_tuple]
@@ -588,7 +631,9 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         )
         return upsampled_output
 
-    def _extract_atomic_transformation(self, combined_input: Tensor) -> IComposableMapping:
+    def _extract_atomic_transformation(
+        self, combined_input: Tensor
+    ) -> IComposableMapping:
         displacement_field = self._obtain_displacement_field(combined_input)
         high_res_coordinate_mapping = ComposableFactory.create_dense_mapping(
             displacement_field=displacement_field,
@@ -597,11 +642,20 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         )
         return high_res_coordinate_mapping
 
-    def _invert_mapping(self, mapping: IComposableMapping) -> IComposableMapping:
-        return mapping.invert(
+    def _invert_mapping(
+        self, mapping: IComposableMapping, device: torch_device
+    ) -> IComposableMapping:
+        inverse = mapping.invert(
             forward_fixed_point_solver=self._forward_fixed_point_solver,
             backward_fixed_point_solver=self._backward_fixed_point_solver,
         )
+        inverse = ComposableFactory.resample_to_dense_mapping(
+            mapping=inverse,
+            coordinate_system=self._transformation_coordinate_system,
+            grid_mapping_args=self._transformation_mapping_args,
+            device=device,
+        )
+        return inverse
 
 
 @define
@@ -616,17 +670,19 @@ class _MappingBuilder:
     left_forward_dense: IComposableMapping = Factory(ComposableFactory.create_identity)
     right_forward_dense: IComposableMapping = Factory(ComposableFactory.create_identity)
     left_inverse_dense: IComposableMapping = Factory(ComposableFactory.create_identity)
-    right_inverse_dense: IComposableMapping = Factory(ComposableFactory.create_identity) 
+    right_inverse_dense: IComposableMapping = Factory(ComposableFactory.create_identity)
 
     def left_forward(self) -> IComposableMapping:
         """Return full left forward mapping"""
-        # pylint bug
-        return self.forward_affine.compose(self.left_forward_dense)  # pylint: disable=no-member
+        return self.forward_affine.compose(  # pylint bug - pylint: disable=no-member
+            self.left_forward_dense
+        )
 
     def right_forward(self) -> IComposableMapping:
         """Return full right forward mapping"""
-        # pylint bug
-        return self.inverse_affine.compose(self.right_forward_dense)  # pylint: disable=no-member
+        return self.inverse_affine.compose(  # pylint bug - pylint: disable=no-member
+            self.right_forward_dense
+        )
 
     def left_inverse(self) -> IComposableMapping:
         """Return full left inverse mapping"""

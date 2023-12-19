@@ -13,7 +13,10 @@ from torch.cuda import (
     max_memory_allocated,
     reset_peak_memory_stats,
 )
-from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
+from algorithm.composable_mapping.interface import (
+    IComposableMapping,
+    VoxelCoordinateSystem,
+)
 
 from data.interface import IStorage, InferenceMetadata
 from data.storage import (
@@ -26,7 +29,11 @@ from data.storage import (
 )
 from util.device import get_device_name
 
-from .interface import ICaseInferenceDefinition, IInferenceDefinition, ITrainingDefinition
+from .interface import (
+    ICaseInferenceDefinition,
+    IInferenceDefinition,
+    ITrainingDefinition,
+)
 
 T = TypeVar("T", bound="BaseCaseInferenceDefinition")
 
@@ -87,6 +94,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         self._do_reverse_inference: bool = application_config["inference"].get(
             "do_reverse_inference", False
         )
+        self._images_1: list[Tensor | None] = []
+        self._images_2: list[Tensor | None] = []
         self._resampled_images_1: list[Tensor | None] = []
         self._resampled_images_2: list[Tensor | None] = []
         self._forward_displacement_fields: list[Tensor | None] = []
@@ -114,6 +123,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             image_1=image_1,
             image_2=image_2,
         )
+        self._images_1.append(image_1[0])
+        self._images_2.append(image_2[0])
         self._resampled_images_1.append(resampled_image_1)
         self._resampled_images_2.append(resampled_image_2)
         self._forward_displacement_fields.append(forward_displacement_field)
@@ -162,6 +173,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
 
     def get_outputs(self) -> Mapping[str, Any]:
         outputs: dict[str, Any] = {
+            "image_1": self._images_1,
+            "image_2": self._images_2,
             "image_1_resampled": self._resampled_images_1,
             "image_2_resampled": self._resampled_images_2,
             "forward_displacement_field": self._forward_displacement_fields,
@@ -177,7 +190,9 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
 class BaseInferenceDefinition(IInferenceDefinition):
     """Base inference implementation"""
 
-    def get_output_storages(self, inference_metadata: InferenceMetadata) -> Mapping[str, IStorage]:
+    def get_output_storages(
+        self, inference_metadata: InferenceMetadata
+    ) -> Mapping[str, IStorage]:
         return {
             "inference_time": FloatStorage("inference_time"),
             "inference_memory_usage": FloatStorage("inference_memory_usage"),
@@ -197,11 +212,35 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             application_config["inference"].get("save_as_composable_mapping", False)
         )
 
-    def get_output_storages(self, inference_metadata: InferenceMetadata) -> Mapping[str, IStorage]:
+    def get_output_storages(
+        self, inference_metadata: InferenceMetadata
+    ) -> Mapping[str, IStorage]:
         num_items = (
-            2 if self._application_config["inference"].get("do_reverse_inference", False) else 1
+            2
+            if self._application_config["inference"].get("do_reverse_inference", False)
+            else 1
         )
         output_storages = {
+            "image_1": SequenceStorageWrapper(
+                OptionalStorageWrapper(
+                    inference_metadata.default_storage_factories[0].create(
+                        inference_metadata.names[0]
+                    ),
+                    name=inference_metadata.names[0],
+                ),
+                identifier="input_order",
+                num_items=num_items,
+            ),
+            "image_2": SequenceStorageWrapper(
+                OptionalStorageWrapper(
+                    inference_metadata.default_storage_factories[0].create(
+                        inference_metadata.names[1]
+                    ),
+                    name=inference_metadata.names[1],
+                ),
+                identifier="input_order",
+                num_items=num_items,
+            ),
             "image_1_resampled": SequenceStorageWrapper(
                 OptionalStorageWrapper(
                     inference_metadata.default_storage_factories[0].create(
@@ -224,7 +263,9 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "forward_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    TensorCompressedStorage(f"{inference_metadata.names[0]}_deformation"),
+                    TensorCompressedStorage(
+                        f"{inference_metadata.names[0]}_deformation"
+                    ),
                     name=f"{inference_metadata.names[0]}_deformation",
                 ),
                 identifier="input_order",
@@ -232,7 +273,9 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "inverse_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    TensorCompressedStorage(f"{inference_metadata.names[1]}_deformation"),
+                    TensorCompressedStorage(
+                        f"{inference_metadata.names[1]}_deformation"
+                    ),
                     name=f"{inference_metadata.names[1]}_deformation",
                 ),
                 identifier="input_order",
@@ -258,7 +301,8 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             )
             output_storages["mapping_coordinate_system"] = SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    TorchStorage("mapping_coordinate_system"), name="mapping_coordinate_system"
+                    TorchStorage("mapping_coordinate_system"),
+                    name="mapping_coordinate_system",
                 ),
                 identifier="input_order",
                 num_items=num_items,
@@ -279,7 +323,9 @@ class BaseTrainingDefinition(ITrainingDefinition):
     def displayed_metrics(self) -> Optional[Iterable[str]]:
         return None
 
-    def get_custom_mass_functions(self) -> Optional[Mapping[str, Callable[[float, float], float]]]:
+    def get_custom_mass_functions(
+        self,
+    ) -> Optional[Mapping[str, Callable[[float, float], float]]]:
         return None
 
     def before_save(self, saving_process_rank: int) -> None:
