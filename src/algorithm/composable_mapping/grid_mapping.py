@@ -3,20 +3,17 @@
 from typing import Optional
 
 from attr import define, field
+from deformation_inversion_layer import (
+    DeformationInversionArguments,
+    fixed_point_invert_deformation,
+)
 from torch import Tensor
 from torch import device as torch_device
 from torch import dtype as torch_dtype
 
 from algorithm.composable_mapping.interface import IComposableMapping
 
-from ..dense_deformation import (
-    calculate_mask_at_voxel_coordinates,
-)
-from ..fixed_point_invert_displacement_field import (
-    DisplacementFieldInversionArguments,
-    fixed_point_invert_displacement_field,
-)
-from ..fixed_point_solver import AndersonSolver
+from ..dense_deformation import calculate_mask_at_voxel_coordinates
 from ..interface import IInterpolator
 from .base import BaseComposableMapping
 from .interface import (
@@ -221,34 +218,23 @@ class GridCoordinateMapping(GridVolume):
         """Fixed point invert displacement field
 
         inversion_parameters:
-            forward_fixed_point_solver (IFixedPointSolver): Forward solver
-            backward_fixed_point_solver (IFixedPointSolver): Backward solver
-            initial_guess (Tensor): Initial guess for fixed point iteration
-            forward_dtype (torch.dtype): Data type used for forward solve
-            backward_dtype (torch.dtype): Data type used for backward solve
+            fixed_point_inversion_arguments (Mapping[str, Any]): Arguments for
+                fixed point inversion
         """
-        if "forward_fixed_point_solver" in inversion_parameters:
-            forward_solver = inversion_parameters["forward_fixed_point_solver"]
-        else:
-            forward_solver = AndersonSolver()
-        if "backward_fixed_point_solver" in inversion_parameters:
-            backward_solver = inversion_parameters["backward_fixed_point_solver"]
-        else:
-            backward_solver = AndersonSolver()
+        fixed_point_inversion_arguments = inversion_parameters.get(
+            "fixed_point_inversion_arguments", {}
+        )
+        deformation_inversion_arguments = DeformationInversionArguments(
+            interpolator=self._grid_mapping_args.interpolator,
+            forward_solver=fixed_point_inversion_arguments.get("forward_solver"),
+            backward_solver=fixed_point_inversion_arguments.get("backward_solver"),
+            forward_dtype=fixed_point_inversion_arguments.get("forward_dtype"),
+            backward_dtype=fixed_point_inversion_arguments.get("backward_dtype"),
+        )
         return _GridCoordinateMappingInverse(
             displacement_field=self._data,
             grid_mapping_args=self._grid_mapping_args,
-            inversion_arguments=DisplacementFieldInversionArguments(
-                interpolator=self._grid_mapping_args.interpolator,
-                forward_solver=AndersonSolver()
-                if forward_solver is None
-                else forward_solver,
-                forward_dtype=inversion_parameters.get("forward_dtype"),
-                backward_solver=AndersonSolver()
-                if backward_solver is None
-                else backward_solver,
-                backward_dtype=inversion_parameters.get("backward_dtype"),
-            ),
+            inversion_arguments=deformation_inversion_arguments,
             mask=self._mask,
         )
 
@@ -289,7 +275,7 @@ class _GridCoordinateMappingInverse(GridVolume):
         self,
         displacement_field: Tensor,
         grid_mapping_args: GridMappingArgs,
-        inversion_arguments: DisplacementFieldInversionArguments,
+        inversion_arguments: DeformationInversionArguments,
         mask: Optional[Tensor] = None,
     ) -> None:
         super().__init__(
@@ -330,7 +316,7 @@ class _GridCoordinateMappingInverse(GridVolume):
         voxel_coordinates = masked_coordinates.generate_values(
             device=self._data.device, dtype=self._data.dtype
         )
-        inverted = fixed_point_invert_displacement_field(
+        inverted = fixed_point_invert_deformation(
             displacement_field=self._data,
             arguments=self._inversion_arguments,
             initial_guess=initial_guess,
@@ -346,7 +332,7 @@ class _GridCoordinateMappingInverse(GridVolume):
             device=self._data.device, dtype=self._data.dtype
         )
         mask = self._update_mask(self._mask, voxel_coordinates, masked_coordinates.mask)
-        inverted = fixed_point_invert_displacement_field(
+        inverted = fixed_point_invert_deformation(
             displacement_field=self._data,
             arguments=self._inversion_arguments,
             initial_guess=None,

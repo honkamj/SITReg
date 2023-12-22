@@ -3,16 +3,23 @@
 from logging import getLogger
 from typing import Any, Mapping
 
+from deformation_inversion_layer.fixed_point_iteration import (
+    AndersonSolver,
+    AndersonSolverArguments,
+)
 from torch import device as torch_device
 from torch.nn.functional import relu
 
 from algorithm.affine_transformation import AffineTransformationTypeDefinition
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs
-from algorithm.fixed_point_solver import AndersonSolver, AndersonSolverArguments
 from algorithm.interpolator import LinearInterpolator
+from application.interface import (
+    IInferenceDefinition,
+    ITrainingDefinition,
+    TrainingDefinitionArgs,
+)
 from application.sitreg.inference import SITRegInference
 from application.sitreg.training import SITRegTraining
-from application.interface import IInferenceDefinition, ITrainingDefinition, TrainingDefinitionArgs
 from model.sitreg import SITReg
 from model.sitreg.feature_extractor import EncoderFeatureExtractor
 from util.count_parameters import count_module_trainable_parameters
@@ -27,11 +34,13 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
         n_input_channels=model_config["n_input_channels"],
         activation=relu,
         n_features_per_resolution=model_config["n_features_per_resolution"],
-        n_convolutions_per_resolution=model_config["n_feature_convolutions_per_resolution"],
+        n_convolutions_per_resolution=model_config[
+            "n_feature_convolutions_per_resolution"
+        ],
         input_shape=model_config["input_shape"],
-        normalizer_factory=import_object(f'model.normalizer.{model_config["normalizer"]["type"]}')(
-            **model_config["normalizer"].get("args", {})
-        ),
+        normalizer_factory=import_object(
+            f'model.normalizer.{model_config["normalizer"]["type"]}'
+        )(**model_config["normalizer"].get("args", {})),
     )
     displacement_field_inversion_config = model_config["displacement_field_inversion"]
     network = SITReg(
@@ -43,21 +52,26 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
             "n_transformation_convolutions_per_resolution"
         ],
         affine_transformation_type=(
-            AffineTransformationTypeDefinition.full() if model_config["predict_affine"] else None
+            AffineTransformationTypeDefinition.full()
+            if model_config["predict_affine"]
+            else None
         ),
         input_voxel_size=model_config["voxel_size"],
         input_shape=model_config["input_shape"],
-        transformation_downsampling_factor=model_config["transformation_downsampling_factor"],
+        transformation_downsampling_factor=model_config[
+            "transformation_downsampling_factor"
+        ],
         transformation_mapping_args=GridMappingArgs(
-            interpolator=LinearInterpolator(padding_mode="border"), mask_outside_fov=False
+            interpolator=LinearInterpolator(padding_mode="border"),
+            mask_outside_fov=False,
         ),
         volume_mapping_args=GridMappingArgs(
-            interpolator=LinearInterpolator(padding_mode="border"), mask_outside_fov=False
+            interpolator=LinearInterpolator(padding_mode="border"),
+            mask_outside_fov=False,
         ),
         forward_fixed_point_solver=AndersonSolver(
             stop_criterion=import_object(
-                "algorithm.fixed_point_solver."
-                + displacement_field_inversion_config["forward_fixed_point_solver"][
+                displacement_field_inversion_config["forward_fixed_point_solver"][
                     "stop_criterion"
                 ]["type"]
             )(
@@ -66,13 +80,14 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
                 ]["args"]
             ),
             arguments=AndersonSolverArguments(
-                **displacement_field_inversion_config["forward_fixed_point_solver"]["arguments"]
+                **displacement_field_inversion_config["forward_fixed_point_solver"][
+                    "arguments"
+                ]
             ),
         ),
         backward_fixed_point_solver=AndersonSolver(
             stop_criterion=import_object(
-                "algorithm.fixed_point_solver."
-                + displacement_field_inversion_config["backward_fixed_point_solver"][
+                displacement_field_inversion_config["backward_fixed_point_solver"][
                     "stop_criterion"
                 ]["type"]
             )(
@@ -81,7 +96,9 @@ def create_model(model_config: Mapping[str, Any], device: torch_device) -> SITRe
                 ]["args"]
             ),
             arguments=AndersonSolverArguments(
-                **displacement_field_inversion_config["backward_fixed_point_solver"]["arguments"]
+                **displacement_field_inversion_config["backward_fixed_point_solver"][
+                    "arguments"
+                ]
             ),
         ),
         max_control_point_multiplier=model_config["max_control_point_multiplier"],

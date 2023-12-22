@@ -89,11 +89,11 @@
                 "displacement_field_inversion": {
                     "forward_fixed_point_solver": {
                         "stop_criterion": {
-                            "type": "MaxElementWiseAbsStopCriterion",
+                            "type": "deformation_inversion_layer.fixed_point_iteration.MaxElementWiseAbsStopCriterion",
                             "args": {
                                 "min_iterations": 2,
                                 "max_iterations": 50,
-                                "max_error": 1e-2
+                                "threshold": 1e-2
                             }
                         },
                         "arguments": {
@@ -102,7 +102,7 @@
                     },
                     "backward_fixed_point_solver": {
                         "stop_criterion": {
-                            "type": "RelativeL2ErrorStopCriterion",
+                            "type": "deformation_inversion_layer.fixed_point_iteration.RelativeL2ErrorStopCriterion",
                             "args": {
                                 "min_iterations": 2,
                                 "max_iterations": 50,

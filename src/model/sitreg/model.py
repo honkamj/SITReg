@@ -7,10 +7,11 @@ from math import ceil
 from typing import Callable, NamedTuple, Optional, Sequence
 
 from attr import Factory, define
+from deformation_inversion_layer.interface import FixedPointSolver
 from numpy import prod as np_prod
-from torch import Tensor, cat, chunk, float64
+from torch import Tensor, cat, chunk
 from torch import device as torch_device
-from torch import tanh, tensor
+from torch import float64, tanh, tensor
 from torch.nn import Linear, Module, ModuleList
 
 from algorithm.affine_transformation import (
@@ -30,7 +31,6 @@ from algorithm.cubic_b_spline_control_point_upper_bound import (
     compute_max_control_point_value,
 )
 from algorithm.cubic_spline_upsampling import CubicSplineUpsampling
-from algorithm.interface import IFixedPointSolver
 from model.components import ConvolutionBlockNd
 from util.ndimensional_operators import conv_nd
 
@@ -96,8 +96,8 @@ class SITReg(Module):
         transformation_downsampling_factor: Sequence[float],
         transformation_mapping_args: GridMappingArgs,
         volume_mapping_args: GridMappingArgs,
-        forward_fixed_point_solver: IFixedPointSolver,
-        backward_fixed_point_solver: IFixedPointSolver,
+        forward_fixed_point_solver: FixedPointSolver,
+        backward_fixed_point_solver: FixedPointSolver,
         max_control_point_multiplier: float,
         activation: Callable[[Tensor], Tensor],
     ) -> None:
@@ -540,8 +540,8 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         transformation_shape: Sequence[int],
         transformation_coordinate_system: VoxelCoordinateSystem,
         transformation_mapping_args: GridMappingArgs,
-        forward_fixed_point_solver: IFixedPointSolver,
-        backward_fixed_point_solver: IFixedPointSolver,
+        forward_fixed_point_solver: FixedPointSolver,
+        backward_fixed_point_solver: FixedPointSolver,
         max_control_point_multiplier: float,
         activation: Callable[[Tensor], Tensor],
     ) -> None:
@@ -646,8 +646,10 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
         self, mapping: IComposableMapping, device: torch_device
     ) -> IComposableMapping:
         inverse = mapping.invert(
-            forward_fixed_point_solver=self._forward_fixed_point_solver,
-            backward_fixed_point_solver=self._backward_fixed_point_solver,
+            fixed_point_inversion_arguments={
+                "forward_solver": self._forward_fixed_point_solver,
+                "backward_solver": self._backward_fixed_point_solver,
+            }
         )
         inverse = ComposableFactory.resample_to_dense_mapping(
             mapping=inverse,

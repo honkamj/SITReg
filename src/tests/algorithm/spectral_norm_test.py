@@ -2,12 +2,12 @@
 
 from unittest import TestCase
 
+from deformation_inversion_layer.fixed_point_iteration import NaiveSolver
 from torch import Generator, Tensor, float64, rand
 from torch.autograd import gradcheck
 from torch.linalg import svdvals
 from torch.testing import assert_close
 
-from algorithm.fixed_point_solver import NaiveSolver
 from algorithm.spectral_norm import (
     SpectralNormMaxElementWiseAbsStopCriterion,
     calculate_spectral_norm_with_power_iteration,
@@ -28,7 +28,7 @@ class SpectralNormPowerIterationTests(TestCase):
                     n_rows=3,
                     max_iterations=200,
                     min_iterations=1,
-                    max_error=1e-4,
+                    threshold=1e-4,
                     check_convergence_every_nth_iteration=10,
                 )
             ),
@@ -49,7 +49,7 @@ class SpectralNormPowerIterationTests(TestCase):
                         n_rows=3,
                         max_iterations=200,
                         min_iterations=1,
-                        max_error=1e-7,
+                        threshold=1e-7,
                         check_convergence_every_nth_iteration=10,
                     )
                 ),

@@ -1,16 +1,17 @@
 """Spectral norm estimation using power iteration"""
 
 
-from torch import Tensor, matmul, cat, sign, randn
+from typing import Sequence
+from deformation_inversion_layer.fixed_point_iteration import (
+    BaseCountingStopCriterion,
+    MaxElementWiseAbsStopCriterion,
+    RelativeL2ErrorStopCriterion,
+)
+from deformation_inversion_layer.interface import FixedPointSolver
+from torch import Tensor, cat, matmul, randn, sign
 from torch.autograd import Function
 from torch.autograd.function import FunctionCtx, once_differentiable
 from torch.nn.functional import normalize
-from algorithm.interface import IFixedPointSolver
-from algorithm.fixed_point_solver import (
-    RelativeL2ErrorStopCriterion,
-    BaseStopCriterion,
-    MaxElementWiseAbsStopCriterion,
-)
 
 from util.dimension_order import (
     broadcast_tensors_by_leading_dims,
@@ -20,7 +21,7 @@ from util.dimension_order import (
 )
 
 
-class SpectralNormStopCriterionMixin(BaseStopCriterion):
+class SpectralNormStopCriterionMixin(BaseCountingStopCriterion):
     """Stop criterion which directly checks the convergence of the spectral norm"""
 
     def __init__(self, n_rows: int, **kwargs) -> None:
@@ -33,38 +34,43 @@ class SpectralNormStopCriterionMixin(BaseStopCriterion):
         right_singular_vector = singular_vectors[:, self._n_rows :]
         return matmul(left_singular_vector, right_singular_vector.transpose(1, 2))
 
-    def _should_stop_after(
-        self, previous_iteration: Tensor, current_iteration: Tensor, iteration_to_end: int
+    def _should_stop(
+        self,
+        current_iteration: Tensor,
+        previous_iterations: Sequence[Tensor],
+        n_earlier_iterations: int,
     ) -> bool:
-        if iteration_to_end - 1 in self._gradient_cache:
-            previous_iteration_gradient = self._gradient_cache[iteration_to_end - 1]
+        if len(previous_iterations) == 0:
+            return False
+        previous_iteration = previous_iterations[0]
+        if n_earlier_iterations - 1 in self._gradient_cache:
+            previous_iteration_gradient = self._gradient_cache[n_earlier_iterations - 1]
         else:
             previous_iteration_gradient = self._gradient(previous_iteration)
         current_iteration_gradient = self._gradient(current_iteration)
-        if self._should_check_convergence(iteration_to_end + 1):
-            self._gradient_cache[iteration_to_end] = current_iteration_gradient
-        return super()._should_stop_after(
-            previous_iteration_gradient,
+        if self._should_check_convergence(n_earlier_iterations + 1):
+            self._gradient_cache[n_earlier_iterations] = current_iteration_gradient
+        return super()._should_stop(
             current_iteration_gradient,
-            iteration_to_end,
+            [previous_iteration_gradient],
+            n_earlier_iterations,
         )
 
-    def should_stop_after(
-        self, previous_iteration: Tensor, current_iteration: Tensor, iteration_to_end: int
+    def should_stop(
+        self,
+        current_iteration: Tensor,
+        previous_iterations: Sequence[Tensor],
+        n_earlier_iterations: int,
     ) -> bool:
-        should_stop = super().should_stop_after(
-            previous_iteration, current_iteration, iteration_to_end
+        should_stop = super().should_stop(
+            current_iteration=current_iteration,
+            previous_iterations=previous_iterations,
+            n_earlier_iterations=n_earlier_iterations,
         )
         if should_stop:
             self._gradient_cache.clear()
-        elif iteration_to_end - 1 in self._gradient_cache:
-            del self._gradient_cache[iteration_to_end - 1]
-        return should_stop
-
-    def should_stop_before(self, iteration_to_start: int) -> bool:
-        should_stop = super().should_stop_before(iteration_to_start)
-        if should_stop:
-            self._gradient_cache.clear()
+        elif n_earlier_iterations - 1 in self._gradient_cache:
+            del self._gradient_cache[n_earlier_iterations - 1]
         return should_stop
 
 
@@ -102,21 +108,21 @@ class SpectralNormMaxElementWiseAbsStopCriterion(
         n_rows: int,
         min_iterations: int = 1,
         max_iterations: int = 50,
-        max_error: float = 1e-2,
+        threshold: float = 1e-2,
         check_convergence_every_nth_iteration: int = 1,
     ) -> None:
         super().__init__(
             n_rows=n_rows,
             min_iterations=min_iterations,
             max_iterations=max_iterations,
-            max_error=max_error,
+            threshold=threshold,
             check_convergence_every_nth_iteration=check_convergence_every_nth_iteration,
         )
 
 
 def calculate_spectral_norm_with_power_iteration(
     matrix: Tensor,
-    solver: IFixedPointSolver,
+    solver: FixedPointSolver,
     initial_left_singular_vector: Tensor | None = None,
     initial_right_singular_vector: Tensor | None = None,
 ) -> Tensor:
@@ -142,17 +148,27 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
     """Compute spectral norm with power iteration"""
 
     @channels_last(
-        {"matrix": 2, "initial_left_singular_vector": 1, "initial_right_singular_vector": 1}, 1
+        {
+            "matrix": 2,
+            "initial_left_singular_vector": 1,
+            "initial_right_singular_vector": 1,
+        },
+        1,
     )
     @merged_batch_dimensions(
-        {"matrix": 2, "initial_left_singular_vector": 1, "initial_right_singular_vector": 1}, 1
+        {
+            "matrix": 2,
+            "initial_left_singular_vector": 1,
+            "initial_right_singular_vector": 1,
+        },
+        1,
     )
     @staticmethod
     def _calculate_spectral_norm(
         matrix: Tensor,
         initial_left_singular_vector: Tensor,
         initial_right_singular_vector: Tensor,
-        solver: IFixedPointSolver,
+        solver: FixedPointSolver,
     ) -> tuple[Tensor, Tensor, Tensor]:
         n_rows = initial_left_singular_vector.size(1)
         combined_singular_vectors = cat(
@@ -161,7 +177,9 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
         del initial_left_singular_vector
         del initial_right_singular_vector
 
-        def _spectral_norm_power_iteration_step(singular_vectors: Tensor, out: Tensor) -> None:
+        def _spectral_norm_power_iteration_step(
+            singular_vectors: Tensor, out: Tensor
+        ) -> None:
             normalize(
                 matmul(
                     matrix.transpose(1, 2),
@@ -173,7 +191,9 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
             )
             normalize(
                 matmul(
-                    matrix, singular_vectors[:, n_rows:], out=combined_singular_vectors[:, :n_rows]
+                    matrix,
+                    singular_vectors[:, n_rows:],
+                    out=combined_singular_vectors[:, :n_rows],
                 ),
                 dim=1,
                 out=out[:, :n_rows],
@@ -198,7 +218,7 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
     def forward(  # type: ignore # pylint: disable=arguments-differ
         ctx: FunctionCtx,
         matrix: Tensor,
-        solver: IFixedPointSolver,
+        solver: FixedPointSolver,
         initial_left_singular_vector: Tensor | None,
         initial_right_singular_vector: Tensor | None,
     ):
@@ -210,7 +230,8 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
         )
         initial_left_singular_vector = (
             randn(
-                matrix.shape[:second_channel_index] + matrix.shape[second_channel_index + 1:],
+                matrix.shape[:second_channel_index]
+                + matrix.shape[second_channel_index + 1 :],
                 dtype=matrix.dtype,
                 device=matrix.device,
             )
@@ -219,7 +240,8 @@ class _SpectralNormPowerIteration(Function):  # pylint: disable=abstract-method
         )
         initial_right_singular_vector = (
             randn(
-                matrix.shape[:first_channel_index] + matrix.shape[first_channel_index + 1 :],
+                matrix.shape[:first_channel_index]
+                + matrix.shape[first_channel_index + 1 :],
                 dtype=matrix.dtype,
                 device=matrix.device,
             )

@@ -3,6 +3,7 @@
 
 from unittest import TestCase
 
+from deformation_inversion_layer.fixed_point_iteration import AndersonSolver
 from torch import rand
 from torch.nn.functional import relu
 from torch.testing import assert_close
@@ -10,11 +11,10 @@ from torch.testing import assert_close
 from algorithm.affine_transformation import AffineTransformationTypeDefinition
 from algorithm.composable_mapping.grid_mapping import GridMappingArgs
 from algorithm.composable_mapping.interface import IComposableMapping
-from algorithm.fixed_point_solver import AndersonSolver
 from algorithm.interpolator import LinearInterpolator
+from model.normalizer import GroupNormalizerFactory
 from model.sitreg import SITReg
 from model.sitreg.feature_extractor import EncoderFeatureExtractor
-from model.normalizer import GroupNormalizerFactory
 
 
 class SITRegTests(TestCase):
@@ -42,10 +42,12 @@ class SITRegTests(TestCase):
             input_shape=(64, 64),
             transformation_downsampling_factor=(1.0, 1.0),
             transformation_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(padding_mode="border"), mask_outside_fov=False
+                interpolator=LinearInterpolator(padding_mode="border"),
+                mask_outside_fov=False,
             ),
             volume_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(padding_mode="border"), mask_outside_fov=False
+                interpolator=LinearInterpolator(padding_mode="border"),
+                mask_outside_fov=False,
             ),
             forward_fixed_point_solver=AndersonSolver(),
             backward_fixed_point_solver=AndersonSolver(),
@@ -56,7 +58,9 @@ class SITRegTests(TestCase):
         inverse_mapping: IComposableMapping
         reverse_forward_mapping: IComposableMapping
         reverse_inverse_mapping: IComposableMapping
-        ((forward_mapping, inverse_mapping),) = symmetric_network(image_1=image_1, image_2=image_2)
+        ((forward_mapping, inverse_mapping),) = symmetric_network(
+            image_1=image_1, image_2=image_2
+        )
         ((reverse_forward_mapping, reverse_inverse_mapping),) = symmetric_network(
             image_1=image_2,
             image_2=image_1,
