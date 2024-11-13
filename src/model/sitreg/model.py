@@ -386,7 +386,9 @@ class SITReg(Module):
                                 level_index,
                             )
                 del batch_combined_features_list[-1]
-            return [output_mappings[mapping_index] for mapping_index in mappings_for_levels]
+            return [
+                output_mappings[mapping_index] for mapping_index in mappings_for_levels
+            ]
 
 
 class _BaseTransformationExtractionNetwork(Module):
@@ -477,12 +479,20 @@ class _AffineExtractionNetwork(_BaseTransformationExtractionNetwork):
         n_linears = 2
         self.linears = ModuleList(
             [
-                Linear(n_affine_extraction_dimensions, n_affine_extraction_dimensions, bias=True)
+                Linear(
+                    n_affine_extraction_dimensions,
+                    n_affine_extraction_dimensions,
+                    bias=True,
+                )
                 for _ in range(n_linears)
             ]
         )
-        self.activations = ModuleList([activation_factory.build() for _ in range(n_linears)])
-        self.final_linear = Linear(n_affine_extraction_dimensions, n_affine_parameters, bias=True)
+        self.activations = ModuleList(
+            [activation_factory.build() for _ in range(n_linears)]
+        )
+        self.final_linear = Linear(
+            n_affine_extraction_dimensions, n_affine_parameters, bias=True
+        )
         self._n_dims = n_dims
 
     def _extract_atomic_transformation(
@@ -497,7 +507,9 @@ class _AffineExtractionNetwork(_BaseTransformationExtractionNetwork):
         affine_matrix = generate_affine_transformation_matrix(
             output, self._affine_transformation_type
         )
-        return affine(affine_matrix).assign_coordinates(self._transformation_coordinate_system)
+        return affine(affine_matrix).assign_coordinates(
+            self._transformation_coordinate_system
+        )
 
     def _modify_input(self, input_tensor: Tensor) -> Tensor:
         return input_tensor.view(input_tensor.size(0), -1)
@@ -637,10 +649,18 @@ class _MappingBuilder:
         self._resample_when_composing = resample_when_composing
         self.forward_affine = forward_affine
         self.inverse_affine = inverse_affine
-        self.left_forward_dense = Identity().assign_coordinates(forward_affine)
-        self.right_forward_dense = Identity().assign_coordinates(forward_affine)
-        self.left_inverse_dense = Identity().assign_coordinates(forward_affine)
-        self.right_inverse_dense = Identity().assign_coordinates(forward_affine)
+        self.left_forward_dense = Identity(
+            device=forward_affine.device, dtype=forward_affine.dtype
+        ).assign_coordinates(forward_affine)
+        self.right_forward_dense = Identity(
+            device=forward_affine.device, dtype=forward_affine.dtype
+        ).assign_coordinates(forward_affine)
+        self.left_inverse_dense = Identity(
+            device=forward_affine.device, dtype=forward_affine.dtype
+        ).assign_coordinates(forward_affine)
+        self.right_inverse_dense = Identity(
+            device=forward_affine.device, dtype=forward_affine.dtype
+        ).assign_coordinates(forward_affine)
 
     def left_forward(self) -> GridComposableMapping:
         """Return full left forward mapping"""
@@ -672,10 +692,18 @@ class _MappingBuilder:
         inverse_dense: GridComposableMapping,
     ) -> None:
         """Update with mappings from new stage"""
-        self.left_forward_dense = self._resample(self.left_forward_dense @ forward_dense)
-        self.right_forward_dense = self._resample(self.right_forward_dense @ inverse_dense)
-        self.left_inverse_dense = self._resample(inverse_dense @ self.left_inverse_dense)
-        self.right_inverse_dense = self._resample(forward_dense @ self.right_inverse_dense)
+        self.left_forward_dense = self._resample(
+            self.left_forward_dense @ forward_dense
+        )
+        self.right_forward_dense = self._resample(
+            self.right_forward_dense @ inverse_dense
+        )
+        self.left_inverse_dense = self._resample(
+            inverse_dense @ self.left_inverse_dense
+        )
+        self.right_inverse_dense = self._resample(
+            forward_dense @ self.right_inverse_dense
+        )
 
     def as_mapping_pair(self, include_affine: bool = True) -> MappingPair:
         """Get current mapping as mapping pair"""
