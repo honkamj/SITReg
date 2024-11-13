@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 from torch import Tensor, stack
 
 from util.dimension_order import index_by_channel_dims, num_spatial_dims
+from util.optional import optional_add
 
 
 def estimate_spatial_derivatives(
@@ -100,13 +101,16 @@ def estimate_spatial_derivatives(
     if central:
         derivatives = derivatives / 2
     if other_dims == "average":
+        averaged_derivatives: Optional[Tensor] = None
         for shifting_slice in product([slice(None, -1), slice(1, None)], repeat=n_spatial_dims - 1):
             shifting_slice = tuple(shifting_slice)
             shifting_slice = (
                 shifting_slice[:spatial_dim] + (slice(None),) + shifting_slice[spatial_dim:]
             )
-            derivatives = derivatives + derivatives[(...,) + shifting_slice]
-        derivatives = derivatives / 2 ** (n_spatial_dims - 1)
+            averaged_derivatives = optional_add(
+                averaged_derivatives, derivatives[(...,) + shifting_slice]
+            )
+        derivatives = averaged_derivatives / 2 ** (n_spatial_dims - 1)
     if other_dims == "crop_both":
         last_channel_dim = index_by_channel_dims(
             volume.ndim, channel_dim_index=n_channel_dims - 1, n_channel_dims=n_channel_dims
