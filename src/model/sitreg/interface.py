@@ -1,13 +1,26 @@
 """SITReg interface"""
 
-from abc import abstractmethod, ABC
+from abc import abstractmethod
 from typing import Optional, Sequence
+
 from torch import Tensor
 from torch.nn import Module
 
 
-class IFeatureExtractor(Module, ABC):
+class FeatureExtractor(Module):
     """Multi-resolution feature extractor for SITReg architecture"""
+
+    @abstractmethod
+    def forward(self, images: Sequence[Tensor]) -> Sequence[Tensor]:
+        """Compute features, starting from features with smallest downsampling factor
+
+        Args:
+            image: Tensor with shape (batch_size, n_channels, dim_1, ..., dim_{n_dims})
+
+        Returns:
+            Sequence of Tensors with shapes
+                (batch_size, n_features, *spatial_shape_of_each_resolution)
+        """
 
     @abstractmethod
     def get_shapes(self) -> Sequence[Sequence[int]]:
@@ -29,15 +42,4 @@ class IFeatureExtractor(Module, ABC):
         Args:
             relative_to_downsampling_factors: Get downsampling factors
                 relative to these factors
-        """
-
-    @abstractmethod
-    def forward(self, image: Tensor) -> Sequence[Tensor]:
-        """Compute features, starting from features with smallest downsampling factor
-
-        Args:
-            image: Tensor with shape (batch_size, n_channels, dim_1, ..., dim_{n_dims})
-
-        Returns:
-            Sequence of Tensors with shapes (batch_size, n_features, dim_1, ..., dim_{n_dims})
         """

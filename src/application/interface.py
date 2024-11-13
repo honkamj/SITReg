@@ -2,13 +2,14 @@
 
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
-from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 from torch import device as torch_device
 from torch.nn import Module
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
-from data.interface import IStorage, InferenceMetadata
+from data.interface import InferenceMetadata, IStorage
 from util.import_util import import_object
 
 
@@ -23,6 +24,10 @@ class ITrainingDefinition(ABC):
         """
 
     @abstractmethod
+    def start_of_epoch(self, epoch: int, n_steps: int) -> None:
+        """Executed at the start of epoch"""
+
+    @abstractmethod
     def before_save(self, saving_process_rank: int) -> None:
         """Executed before saving the model at the process of given rank
 
@@ -30,7 +35,7 @@ class ITrainingDefinition(ABC):
         to the main process."""
 
     @abstractmethod
-    def get_optimizers(self) -> Mapping[str, Optimizer]:
+    def get_optimizers(self) -> Mapping[str, Optimizer | LRScheduler]:
         """Get optimizers"""
 
     @abstractmethod
@@ -58,7 +63,7 @@ class ICaseInferenceDefinition(AbstractContextManager):
     """Defines inference for a case"""
 
     @abstractmethod
-    def __enter__(self) -> 'ICaseInferenceDefinition':
+    def __enter__(self) -> "ICaseInferenceDefinition":
         """Enter context manager"""
 
     @abstractmethod
@@ -88,30 +93,28 @@ class IInferenceDefinition(ABC):
 
 class TrainingDefinitionArgs(NamedTuple):
     """Args for creating training definitions"""
-    device: torch_device
+
+    devices: Sequence[torch_device]
     training_process_rank: int
+    training_process_local_rank: int
     n_training_processes: int
+    n_local_training_processes: int
 
 
 def create_training_definition(
     config: Mapping[str, Any], args: TrainingDefinitionArgs
 ) -> ITrainingDefinition:
     """Create training definition based on config"""
-    application_module = config["application"]["module"]
+    training_factory = config["application"]["training_factory"]
     application_config = config["application"]["config"]
-    create_function = import_object(
-        f"application.{application_module}.interface.create_training_definition"
-    )
-    return create_function(application_config, args)
+    training_factory = import_object(config["application"]["training_factory"])
+    return training_factory(application_config, args)
 
 
 def create_inference_definition(
     config: Mapping[str, Any], device: torch_device
 ) -> IInferenceDefinition:
     """Create inference definition based on config"""
-    application_module = config["application"]["module"]
     application_config = config["application"]["config"]
-    create_function = import_object(
-        f"application.{application_module}.interface.create_inference_definition"
-    )
-    return create_function(application_config, device)
+    inference_factory = import_object(config["application"]["inference_factory"])
+    return inference_factory(application_config, device)

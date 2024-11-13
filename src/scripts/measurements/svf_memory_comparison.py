@@ -1,33 +1,34 @@
 """Script for measuring memory use with respect to standard SVF framework"""
 
-
 from argparse import ArgumentParser
 
-from torch import Generator, Tensor, arange, device, meshgrid, rand, stack
-from torch.cuda import (
-    max_memory_allocated,
-    memory_allocated,
-    reset_peak_memory_stats,
-    synchronize,
-    Event,
-    current_stream,
+from composable_mapping import (
+    CoordinateSystem,
+    DataFormat,
+    LinearInterpolator,
+    samplable_volume,
 )
-from torch.nn import Module
-from torch.nn.functional import grid_sample
-
-from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs, as_displacement_field
-from algorithm.fixed_point_invert_displacement_field import (
-    DisplacementFieldInversionArguments,
-    fixed_point_invert_displacement_field,
+from deformation_inversion_layer import fixed_point_invert_deformation
+from deformation_inversion_layer.fixed_point_invert_deformation import (
+    DeformationInversionArguments,
 )
-from algorithm.fixed_point_solver import (
+from deformation_inversion_layer.fixed_point_iteration import (
     AndersonSolver,
     AndersonSolverArguments,
     MaxElementWiseAbsStopCriterion,
     RelativeL2ErrorStopCriterion,
 )
-from algorithm.interpolator import LinearInterpolator
+from torch import Generator, Tensor, arange, device, meshgrid, rand, stack
+from torch.cuda import (
+    Event,
+    current_stream,
+    max_memory_allocated,
+    memory_allocated,
+    reset_peak_memory_stats,
+    synchronize,
+)
+from torch.nn import Module
+from torch.nn.functional import grid_sample
 
 DEVICE = device("cuda:0")
 SHAPE = (144, 192, 160)
@@ -118,13 +119,14 @@ def _measure_svf_memory_full():
 
 
 def _fixed_point_composition(displacement_field_1: Tensor, displacement_field_2: Tensor) -> Tensor:
-    inverse_displacement_field = fixed_point_invert_displacement_field(
+    interpolator = LinearInterpolator()
+    inverse_displacement_field = fixed_point_invert_deformation(
         displacement_field=displacement_field_2,
-        arguments=DisplacementFieldInversionArguments(
-            interpolator=LinearInterpolator(),
+        arguments=DeformationInversionArguments(
+            interpolator=interpolator.sample_values,
             forward_solver=AndersonSolver(
                 stop_criterion=MaxElementWiseAbsStopCriterion(
-                    min_iterations=2, max_iterations=50, max_error=1e-2
+                    min_iterations=2, max_iterations=50, threshold=1e-2
                 ),
                 arguments=AndersonSolverArguments(memory_length=4),
             ),
@@ -136,31 +138,34 @@ def _fixed_point_composition(displacement_field_1: Tensor, displacement_field_2:
             ),
         ),
     )
-    coordinate_system = CoordinateSystemFactory.voxel(SHAPE)
-    mapping = ComposableFactory.create_dense_mapping(
-        displacement_field=displacement_field_1,
-        coordinate_system=coordinate_system,
-        grid_mapping_args=GridMappingArgs(LinearInterpolator(), mask_outside_fov=False),
+    coordinate_system = CoordinateSystem.voxel(
+        SHAPE, dtype=displacement_field_1.dtype, device=displacement_field_1.device
     )
-    inverse_mapping = ComposableFactory.create_dense_mapping(
-        displacement_field=inverse_displacement_field,
+    mapping = samplable_volume(
+        displacement_field_1,
         coordinate_system=coordinate_system,
-        grid_mapping_args=GridMappingArgs(LinearInterpolator(), mask_outside_fov=False),
+        data_format=DataFormat.voxel_displacements(),
+        sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
     )
-    output, _mask = as_displacement_field(mapping.compose(inverse_mapping), coordinate_system)
-    return output
+    inverse_mapping = samplable_volume(
+        inverse_displacement_field,
+        coordinate_system=coordinate_system,
+        data_format=DataFormat.voxel_displacements(),
+        sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+    )
+    return (mapping @ inverse_mapping).sample().generate_values()
 
 
 def _measure_fixed_point_memory_single():
     displacement_field = _generate_volume().requires_grad_(True)
     memory_before = memory_allocated(DEVICE)
-    inverse_displacement_field = fixed_point_invert_displacement_field(
+    inverse_displacement_field = fixed_point_invert_deformation(
         displacement_field=displacement_field,
-        arguments=DisplacementFieldInversionArguments(
+        arguments=DeformationInversionArguments(
             interpolator=LinearInterpolator(),
             forward_solver=AndersonSolver(
                 stop_criterion=MaxElementWiseAbsStopCriterion(
-                    min_iterations=2, max_iterations=50, max_error=1e-2
+                    min_iterations=2, max_iterations=50, threshold=1e-2
                 ),
                 arguments=AndersonSolverArguments(memory_length=4),
             ),

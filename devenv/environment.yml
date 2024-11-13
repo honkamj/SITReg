@@ -4,10 +4,10 @@ channels:
   - nvidia
 dependencies:
   - python=3.10
-  - pytorch::pytorch-cuda=11.7
+  - pytorch::pytorch-cuda=11.8
   - pytorch::torchvision
   - pytorch::torchaudio
-  - pytorch::pytorch=1.13
+  - pytorch::pytorch=2.5
   - matplotlib
   - ipykernel
   - numpy
@@ -29,4 +29,7 @@ dependencies:
     - nibabel
     - antspyx
     - git+https://github.com/deepmind/surface-distance.git
+    - git+https://github.com/honkamj/composable-mapping
     - deformation-inversion-layer >= 1.1.2
+    - icon-registration
+    - gdown

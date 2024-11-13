@@ -5,20 +5,18 @@ from time import time
 from types import TracebackType
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, TypeVar
 
-from torch import Tensor, device as torch_device
+from composable_mapping import GridComposableMapping
+from torch import Tensor
+from torch import device as torch_device
 from torch.cuda import (
     Event,
     current_stream,
-    synchronize,
     max_memory_allocated,
     reset_peak_memory_stats,
-)
-from algorithm.composable_mapping.interface import (
-    IComposableMapping,
-    VoxelCoordinateSystem,
+    synchronize,
 )
 
-from data.interface import IStorage, InferenceMetadata
+from data.interface import InferenceMetadata, IStorage
 from data.storage import (
     FloatStorage,
     OptionalStorageWrapper,
@@ -101,9 +99,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         self._forward_displacement_fields: list[Tensor | None] = []
         self._inverse_displacement_fields: list[Tensor | None] = []
 
-        self._forward_mappings: list[Optional[IComposableMapping]] = []
-        self._inverse_mappings: list[Optional[IComposableMapping]] = []
-        self._mapping_coordinate_systems: list[Optional[VoxelCoordinateSystem]] = []
+        self._forward_mappings: list[Optional[GridComposableMapping]] = []
+        self._inverse_mappings: list[Optional[GridComposableMapping]] = []
 
         self._save_as_composable_mapping: bool = bool(
             application_config["inference"].get("save_as_composable_mapping", False)
@@ -118,7 +115,6 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             inverse_displacement_field,
             forward_mapping,
             inverse_mapping,
-            mapping_coordinate_system,
         ) = self._infer(
             image_1=image_1,
             image_2=image_2,
@@ -132,7 +128,6 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         if self._save_as_composable_mapping:
             self._forward_mappings.append(forward_mapping)
             self._inverse_mappings.append(inverse_mapping)
-            self._mapping_coordinate_systems.append(mapping_coordinate_system)
         if self._do_reverse_inference:
             (
                 resampled_image_2,
@@ -141,7 +136,6 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
                 forward_displacement_field,
                 inverse_mapping,
                 forward_mapping,
-                mapping_coordinate_system,
             ) = self._infer(
                 image_1=image_2,
                 image_2=image_1,
@@ -153,7 +147,6 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
             if self._save_as_composable_mapping:
                 self._forward_mappings.append(forward_mapping)
                 self._inverse_mappings.append(inverse_mapping)
-                self._mapping_coordinate_systems.append(mapping_coordinate_system)
 
     @abstractmethod
     def _infer(
@@ -165,9 +158,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         Tensor | None,
         Tensor | None,
         Tensor | None,
-        IComposableMapping | None,
-        IComposableMapping | None,
-        VoxelCoordinateSystem | None,
+        GridComposableMapping | None,
+        GridComposableMapping | None,
     ]:
         """Do registration between two images"""
 
@@ -183,16 +175,13 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
         if self._save_as_composable_mapping:
             outputs["forward_mapping"] = self._forward_mappings
             outputs["inverse_mapping"] = self._inverse_mappings
-            outputs["mapping_coordinate_system"] = self._mapping_coordinate_systems
-        return outputs | super().get_outputs()
+        return outputs | dict(super().get_outputs())
 
 
 class BaseInferenceDefinition(IInferenceDefinition):
     """Base inference implementation"""
 
-    def get_output_storages(
-        self, inference_metadata: InferenceMetadata
-    ) -> Mapping[str, IStorage]:
+    def get_output_storages(self, inference_metadata: InferenceMetadata) -> Mapping[str, IStorage]:
         return {
             "inference_time": FloatStorage("inference_time"),
             "inference_memory_usage": FloatStorage("inference_memory_usage"),
@@ -212,13 +201,9 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             application_config["inference"].get("save_as_composable_mapping", False)
         )
 
-    def get_output_storages(
-        self, inference_metadata: InferenceMetadata
-    ) -> Mapping[str, IStorage]:
+    def get_output_storages(self, inference_metadata: InferenceMetadata) -> Mapping[str, IStorage]:
         num_items = (
-            2
-            if self._application_config["inference"].get("do_reverse_inference", False)
-            else 1
+            2 if self._application_config["inference"].get("do_reverse_inference", False) else 1
         )
         output_storages = {
             "image_1": SequenceStorageWrapper(
@@ -233,7 +218,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "image_2": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    inference_metadata.default_storage_factories[0].create(
+                    inference_metadata.default_storage_factories[1].create(
                         inference_metadata.names[1]
                     ),
                     name=inference_metadata.names[1],
@@ -253,7 +238,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "image_2_resampled": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    inference_metadata.default_storage_factories[0].create(
+                    inference_metadata.default_storage_factories[1].create(
                         f"{inference_metadata.names[1]}_resampled"
                     ),
                     name=f"{inference_metadata.names[1]}_resampled",
@@ -263,9 +248,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "forward_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    TensorCompressedStorage(
-                        f"{inference_metadata.names[0]}_deformation"
-                    ),
+                    TensorCompressedStorage(f"{inference_metadata.names[0]}_deformation"),
                     name=f"{inference_metadata.names[0]}_deformation",
                 ),
                 identifier="input_order",
@@ -273,9 +256,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
             ),
             "inverse_displacement_field": SequenceStorageWrapper(
                 OptionalStorageWrapper(
-                    TensorCompressedStorage(
-                        f"{inference_metadata.names[1]}_deformation"
-                    ),
+                    TensorCompressedStorage(f"{inference_metadata.names[1]}_deformation"),
                     name=f"{inference_metadata.names[1]}_deformation",
                 ),
                 identifier="input_order",
@@ -307,7 +288,7 @@ class BaseRegistrationInferenceDefinition(BaseInferenceDefinition):
                 identifier="input_order",
                 num_items=num_items,
             )
-        return output_storages | super().get_output_storages(inference_metadata)
+        return output_storages | dict(super().get_output_storages(inference_metadata))
 
 
 class BaseTrainingDefinition(ITrainingDefinition):
@@ -315,6 +296,12 @@ class BaseTrainingDefinition(ITrainingDefinition):
 
     def __init__(self, application_config: Mapping[str, Any]) -> None:
         self._n_epochs = application_config["training"]["n_epochs"]
+        self._current_epoch = 0
+        self._n_steps_per_epoch = 0
+
+    def start_of_epoch(self, epoch: int, n_steps: int) -> None:
+        self._current_epoch = epoch
+        self._n_steps_per_epoch = n_steps
 
     @property
     def n_epochs(self) -> int:

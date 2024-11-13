@@ -1,0 +1,140 @@
+{
+    "data": {
+        "module": "lung250m_4b",
+        "config": {
+            "batch_size": 1,
+            "iterate_inference_pairs_in_both_directions": false,
+            "downsampling_factor": [2, 2, 2],
+            "crop_or_pad_to": [320, 224, 320],
+            "clip": [0.0, 1024.0],
+            "shift_and_normalize": [0.0, 1024.0],
+            "seed": 123456789,
+            "training_pairs_per_epoch": 5000,
+            "n_training_cases": null,
+            "metrics": {
+		    	"validate": ["sampled_determinant", "inverse_consistency", "landmark"],
+		    	"test": ["sampled_determinant", "inverse_consistency", "landmark"]
+		    },
+            "n_jacobian_samples_in_evaluation": 1000000,
+            "jacobian_sampling_base_seed": 8524561973
+        }
+    },
+    "application": {
+        "training_factory": "application.sitreg.interface.create_training_definition",
+        "inference_factory": "application.sitreg.interface.create_inference_definition",
+        "config": {
+            "inference": {
+        		"save_intermediate_mappings_for_levels": null,
+                "do_reverse_inference": true,
+                "save_as_composable_mapping": true,
+                "resample_when_composing": true
+        	},
+            "model": {
+                "n_features_per_resolution": [
+                    8,
+                    36,
+                    36,
+                    36,
+                    36,
+                    36
+                ],
+                "n_feature_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "n_transformation_features_per_resolution": [
+                    16,
+                    62,
+                    62,
+                    62,
+                    62,
+                    62
+                ],
+                "n_transformation_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "max_control_point_multiplier": 0.99,
+                "transformation_downsampling_factor": [1.0, 1.0, 1.0],
+                "predict_affine": false,
+                "activation": {
+                    "type": "ReLUFactory"
+                },
+                "normalizer": {
+                    "type": "GroupNormalizerFactory",
+                    "args": {
+                        "n_groups": 2
+                    }
+                },
+                "n_input_channels": 1,
+                "voxel_size": [2.0, 2.0, 2.0],
+                "input_shape": [160, 112, 160],
+                "displacement_field_inversion": {
+                    "forward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "deformation_inversion_layer.fixed_point_iteration.MaxElementWiseAbsStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "threshold": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    },
+                    "backward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "deformation_inversion_layer.fixed_point_iteration.RelativeL2ErrorStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "threshold": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    }
+                }
+            },
+            "training": {
+                "n_epochs": 4,
+                "optimizer": {
+                    "learning_rate": 1e-4,
+                    "betas": [0.9, 0.999]
+                },
+                "loss": {
+                    "similarity": [
+                        [
+                            {
+                                "name": "ncc",
+                                "type": "LocalNormalizedCrossCorrelationLoss",
+                                "args": {
+                                    "window_size": 7
+                                }
+                            }
+                        ]
+                    ],
+                    "regularity": [
+                        [
+                            {
+                                "name": "gradient",
+                                "type": "GradientDeformationLoss",
+                                "weight": 1.0
+                            }
+                        ]
+                    ]
+                }
+            }
+        }
+    }
+}

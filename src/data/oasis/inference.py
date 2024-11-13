@@ -19,25 +19,25 @@ class OasisInferenceFactory(BaseVolumetricRegistrationInferenceFactory):
         self, dataset: VolumetricRegistrationInferenceDataset, data_config: Mapping[str, Any]
     ) -> None:
         super().__init__(dataset)
-        self._evaluation_mask_file_type_seg35 = data_config["evaluation_mask_file_type_seg35"]
         self._metrics_to_compute = data_config["metrics"][dataset.division]
         self._n_jacobian_samples = data_config.get("n_jacobian_samples_in_evaluation")
         self._evaluation_prefix = data_config.get("evaluation_prefix", "")
         self._jacobian_sampling_base_seed = data_config.get("jacobian_sampling_base_seed", None)
+        self._upsampling_factor = data_config.get("downsampling_factor", None)
 
     def _get_storage_factory(self, affine: Tensor) -> NiftiStorageFactory:
         return NiftiStorageFactory(affine)
 
     def get_evaluator(self, index: int, device: torch_device) -> OasisEvaluator:
-        source_mask_seg35, target_mask_seg35 = self._dataset.get_pair(
-            index,
-            data_args=self._dataset.data_args.modified_copy(
-                file_type=self._evaluation_mask_file_type_seg35,
-                normalize=False,
-                shift_and_normalize=None,
-            ),
-        )
         image_1_name, image_2_name = self._dataset.names(index)
+        source_mask_seg35 = self._dataset.data.get_case_evaluation_segmentation(
+            case_name=image_1_name,
+            args=self._dataset.data_args,
+            registration_index=0,
+        )[None]
+        target_mask_seg35 = self._dataset.data.get_case_evaluation_segmentation(
+            case_name=image_2_name, args=self._dataset.data_args, registration_index=1
+        )[None]
         image_1_affine, image_2_affine = self._dataset.affines(index)
         return OasisEvaluator(
             source_mask_seg=source_mask_seg35.to(device),
@@ -52,4 +52,5 @@ class OasisInferenceFactory(BaseVolumetricRegistrationInferenceFactory):
             if self._jacobian_sampling_base_seed is not None
             else None,
             evaluation_prefix=self._evaluation_prefix,
+            upsampling_factor=self._upsampling_factor,
         )

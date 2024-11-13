@@ -4,16 +4,26 @@ from itertools import product
 from typing import Sequence
 from unittest import TestCase
 
-from torch import cat, empty, float64, tensor
-
-from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
-from algorithm.composable_mapping.finite_difference import (
-    estimate_spatial_jacobian_matrices_for_mapping,
+from composable_mapping import (
+    CoordinateSystem,
+    CubicSplineSampler,
+    DataFormat,
+    End,
+    EnumeratedSamplingParameterCache,
+    LimitDirection,
+    LinearInterpolator,
+    OriginalShape,
+    SamplableVolume,
+    Start,
+    estimate_spatial_jacobian_matrices,
+    samplable_volume,
 )
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs
-from algorithm.cubic_b_spline_control_point_upper_bound import compute_max_control_point_value
-from algorithm.cubic_spline_upsampling import CubicSplineUpsampling
-from algorithm.interpolator import EmptyInterpolator
+from torch import float64, stack, tensor
+from tqdm import tqdm  # type: ignore
+
+from algorithm.cubic_b_spline_control_point_upper_bound import (
+    compute_max_control_point_value,
+)
 from tests.test_categories import lengthy
 
 
@@ -22,43 +32,72 @@ class CubicSplineCoefficientsTests(TestCase):
 
     def _compute_true_2d_upper_bound(self, upsampling_factors: Sequence[int]) -> float:
         max_lipschitz_constant = 0.0
-        upsampling_factors_tensor = tensor(upsampling_factors, dtype=float64)
-        for flattened_volume in product((-1, 1), repeat=16):
-            volume = tensor(flattened_volume, dtype=float64).view(1, 1, 4, 4)
-            upsampling = CubicSplineUpsampling(upsampling_factor=upsampling_factors, dtype=float64)
-            upsampling.to(float64)
-
-            upsampled_volume = upsampling(volume, apply_prefiltering=False) * 2 / 4
-            stacked_upsampled_volume = cat([upsampled_volume] * 2, dim=1)
-            coordinate_system = CoordinateSystemFactory.centered_normalized(
-                original_grid_shape=upsampled_volume.shape[2:],
-                voxel_size=1 / (2 * upsampling_factors_tensor),
-                dtype=float64,
-            )
-            mapping = ComposableFactory.create_volume(
-                data=stacked_upsampled_volume,
-                coordinate_system=coordinate_system,
-                grid_mapping_args=GridMappingArgs(
-                    interpolator=EmptyInterpolator(),
-                    mask_outside_fov=False,
-                ),
-            )
-            batch_size = volume.size(0)
-            n_dims = volume.ndim - 2
-            jacobians = empty(
-                (batch_size, 2, n_dims, 2**n_dims)
-                + tuple(dim_size - 1 for dim_size in upsampled_volume.shape[2:]),
-                dtype=volume.dtype,
-            )
-            estimate_spatial_jacobian_matrices_for_mapping(
-                mapping=mapping,
-                coordinate_system=coordinate_system,
-                other_dims="crop_both",
-                out=jacobians,
-            )
-            lipschitz_constant = jacobians.abs().sum(dim=2).max().item()
-            if lipschitz_constant > max_lipschitz_constant:
-                max_lipschitz_constant = lipschitz_constant
+        sampler = LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False)
+        cache = EnumeratedSamplingParameterCache()
+        for flattened_volume in tqdm(list(product((-1, 1), repeat=16))):
+            with cache:
+                volume = tensor(flattened_volume, dtype=float64).view(1, 1, 4, 4).expand(1, 2, 4, 4)
+                coordinate_system = CoordinateSystem.centered_normalized(
+                    volume.shape[2:], voxel_size=1.0, dtype=float64, device=volume.device
+                )
+                upsampled_coordinate_system = coordinate_system.reformat(
+                    upsampling_factor=upsampling_factors,
+                )
+                mapping = samplable_volume(
+                    volume,
+                    coordinate_system=coordinate_system,
+                    sampler=CubicSplineSampler(prefilter=False),
+                    data_format=DataFormat.voxel_displacements(),
+                ).resample_to(upsampled_coordinate_system, sampler=sampler)
+                mapping = SamplableVolume(
+                    mapping.sample(DataFormat.world_displacements()),
+                    coordinate_system=upsampled_coordinate_system,
+                    sampler=sampler,
+                )
+                jacobians_corner_left_left = estimate_spatial_jacobian_matrices(
+                    mapping,
+                    target=upsampled_coordinate_system.reformat(
+                        spatial_shape=OriginalShape() - 1, reference=(Start(), Start())
+                    ),
+                    limit_direction=[LimitDirection.right(), LimitDirection.right()],
+                    sampler=sampler,
+                ).generate_values()
+                jacobians_corner_left_right = estimate_spatial_jacobian_matrices(
+                    mapping,
+                    target=upsampled_coordinate_system.reformat(
+                        spatial_shape=OriginalShape() - 1, reference=(Start(), End())
+                    ),
+                    limit_direction=[LimitDirection.right(), LimitDirection.left()],
+                    sampler=sampler,
+                ).generate_values()
+                jacobians_corner_right_left = estimate_spatial_jacobian_matrices(
+                    mapping,
+                    target=upsampled_coordinate_system.reformat(
+                        spatial_shape=OriginalShape() - 1, reference=(End(), Start())
+                    ),
+                    limit_direction=[LimitDirection.left(), LimitDirection.right()],
+                    sampler=sampler,
+                ).generate_values()
+                jacobians_corner_right_right = estimate_spatial_jacobian_matrices(
+                    mapping,
+                    target=upsampled_coordinate_system.reformat(
+                        spatial_shape=OriginalShape() - 1, reference=(End(), End())
+                    ),
+                    limit_direction=[LimitDirection.left(), LimitDirection.left()],
+                    sampler=sampler,
+                ).generate_values()
+                jacobians = stack(
+                    [
+                        jacobians_corner_left_left,
+                        jacobians_corner_left_right,
+                        jacobians_corner_right_left,
+                        jacobians_corner_right_right,
+                    ],
+                    dim=3,
+                )
+                lipschitz_constant = jacobians.abs().sum(dim=2).max().item()
+                if lipschitz_constant > max_lipschitz_constant:
+                    max_lipschitz_constant = lipschitz_constant
         return 1 / max_lipschitz_constant
 
     @lengthy

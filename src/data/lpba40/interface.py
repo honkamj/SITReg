@@ -5,8 +5,6 @@ from typing import Any, Mapping
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from data.lpba40.data import LPBA40Data
-from data.lpba40.inference import LPBA40InferenceFactory
 from data.dataset import (
     VolumetricRegistrationInferenceDataset,
     VolumetricRegistrationTrainingDataset,
@@ -17,6 +15,8 @@ from data.interface import (
     TrainingDataLoaderArgs,
     VolumetricDataArgs,
 )
+from data.lpba40.data import LPBA40Data
+from data.lpba40.inference import LPBA40InferenceFactory
 
 
 def create_training_data_loader(
@@ -26,6 +26,12 @@ def create_training_data_loader(
     data = LPBA40Data(
         data_root=args.data_root,
         both_directions=data_config["iterate_inference_pairs_in_both_directions"],
+        file_type=data_config["file_type"],
+        segmentation_file_type=data_config["segmentation_file_type"],
+        included_segmentation_class_indices=data_config["included_segmentation_class_indices"],
+        training_segmentation_class_index_groups=data_config.get(
+            "training_segmentation_class_index_groups"
+        ),
     )
     training_dataset = VolumetricRegistrationTrainingDataset(
         data=data,
@@ -66,6 +72,9 @@ def create_inference_data_factory(
     data = LPBA40Data(
         data_root=args.data_root,
         both_directions=data_config["iterate_inference_pairs_in_both_directions"],
+        file_type=data_config["file_type"],
+        segmentation_file_type=data_config["segmentation_file_type"],
+        included_segmentation_class_indices=data_config["included_segmentation_class_indices"],
     )
     return LPBA40InferenceFactory(
         dataset=VolumetricRegistrationInferenceDataset(

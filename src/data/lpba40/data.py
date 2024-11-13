@@ -7,6 +7,7 @@ from os.path import isdir, join
 from shutil import move, rmtree
 from typing import Sequence, cast
 
+from composable_mapping import LinearInterpolator
 from nibabel import Nifti1Image  # type: ignore
 from nibabel import load as nib_load
 from nibabel import save as nib_save
@@ -15,8 +16,6 @@ from numpy import sum as np_sum
 from torch import Tensor, from_numpy, get_default_dtype, ones, tensor
 
 from algorithm.affine_transformation import embed_transformation, generate_scale_matrix
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs
-from algorithm.interpolator import LinearInterpolator
 from data.base import BaseDataDownloader, BaseVolumetricRegistrationData
 from data.interface import VolumetricDataArgs
 from util.download import download
@@ -201,9 +200,7 @@ class LPBA40DataDownloader(BaseDataDownloader):
             air=air,
             volume=image_tensor,
             target_voxel_size=voxel_size,
-            grid_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(), mask_outside_fov=False
-            ),
+            sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
         )
         nifti_image = Nifti1Image(
             transformed_image.numpy()[0],
@@ -306,23 +303,69 @@ class LPBA40Data(BaseVolumetricRegistrationData):
         "S40",
     ]
 
-    def __init__(self, data_root: str, both_directions: bool) -> None:
-        super().__init__(data_root, LPBA40DataDownloader())
+    def __init__(
+        self,
+        data_root: str,
+        both_directions: bool,
+        file_type: str,
+        segmentation_file_type: str,
+        included_segmentation_class_indices: Sequence[int] | None = None,
+        training_segmentation_class_index_groups: Sequence[Sequence[int]] | None = None,
+    ) -> None:
+        super().__init__(
+            data_root,
+            LPBA40DataDownloader(),
+            included_segmentation_class_indices=included_segmentation_class_indices,
+            training_segmentation_class_index_groups=training_segmentation_class_index_groups,
+        )
         self._both_directions = both_directions
+        self._image_file_type = file_type
+        self._segmentation_file_type = segmentation_file_type
 
-    def get_case_affine(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        return from_numpy(self._get_spatial_image_for_case(case_name, args.file_type).affine)
+    def get_case_affine(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        return from_numpy(self._get_spatial_image_for_case(case_name, self._image_file_type).affine)
 
-    def _get_raw_shape_for_case(self, case_name: str, args: VolumetricDataArgs) -> Sequence[int]:
-        return self._get_spatial_image_for_case(case_name, args.file_type).shape
+    def _get_raw_shape_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Sequence[int]:
+        return self._get_spatial_image_for_case(case_name, self._image_file_type).shape
 
-    def _get_raw_data_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        data = self._get_spatial_image_for_case(case_name, args.file_type).get_fdata()
+    def _get_raw_data_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        data = self._get_spatial_image_for_case(case_name, self._image_file_type).get_fdata()
+        return from_numpy(data).to(get_default_dtype())[None]
+
+    def _get_raw_segmentation_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        data = self._get_spatial_image_for_case(case_name, self._segmentation_file_type).dataobj[
+            ...
+        ]
         return from_numpy(data).to(get_default_dtype())
 
-    def _get_raw_mask_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        shape = self._get_raw_shape_for_case(case_name, args)
-        return ones(shape)
+    def _get_raw_mask_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        shape = self._get_raw_shape_for_case(case_name, args, registration_index)
+        return ones(shape)[None]
 
     def _get_path_to_case(self, case_name: str, file_type: str) -> str:
         return join(self._data_location, case_name, f"{case_name}.{file_type}.nii.gz")

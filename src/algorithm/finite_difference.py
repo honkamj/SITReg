@@ -100,16 +100,13 @@ def estimate_spatial_derivatives(
     if central:
         derivatives = derivatives / 2
     if other_dims == "average":
-        front_cropping_slice_other_dims = (...,) + tuple(
-            slice(None) if i == spatial_dim else slice(1, None) for i in range(n_spatial_dims)
-        )
-        back_cropping_slice_other_dims = (...,) + tuple(
-            slice(None) if i == spatial_dim else slice(None, -1) for i in range(n_spatial_dims)
-        )
-        derivatives = (
-            derivatives[front_cropping_slice_other_dims]
-            + derivatives[back_cropping_slice_other_dims]
-        ) / 2
+        for shifting_slice in product([slice(None, -1), slice(1, None)], repeat=n_spatial_dims - 1):
+            shifting_slice = tuple(shifting_slice)
+            shifting_slice = (
+                shifting_slice[:spatial_dim] + (slice(None),) + shifting_slice[spatial_dim:]
+            )
+            derivatives = derivatives + derivatives[(...,) + shifting_slice]
+        derivatives = derivatives / 2 ** (n_spatial_dims - 1)
     if other_dims == "crop_both":
         last_channel_dim = index_by_channel_dims(
             volume.ndim, channel_dim_index=n_channel_dims - 1, n_channel_dims=n_channel_dims

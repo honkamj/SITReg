@@ -49,23 +49,69 @@ class OasisDataDownloader(BaseDataDownloader):
 class OasisData(BaseVolumetricRegistrationData):
     """Class for accessing OASIS cases"""
 
-    def __init__(self, data_root: str, both_directions: bool) -> None:
-        super().__init__(data_root, OasisDataDownloader())
+    def __init__(
+        self,
+        data_root: str,
+        both_directions: bool,
+        file_type: str,
+        segmentation_file_type: str,
+        included_segmentation_class_indices: Sequence[int] | None = None,
+        training_segmentation_class_index_groups: Sequence[Sequence[int]] | None = None,
+    ) -> None:
+        super().__init__(
+            data_root=data_root,
+            data_downloader=OasisDataDownloader(),
+            included_segmentation_class_indices=included_segmentation_class_indices,
+            training_segmentation_class_index_groups=training_segmentation_class_index_groups,
+        )
         self._both_directions = both_directions
+        self._image_file_type = file_type
+        self._segmentation_file_type = segmentation_file_type
 
-    def get_case_affine(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        return from_numpy(self._get_spatial_image_for_case(case_name, args.file_type).affine)
+    def get_case_affine(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        return from_numpy(self._get_spatial_image_for_case(case_name, self._image_file_type).affine)
 
-    def _get_raw_shape_for_case(self, case_name: str, args: VolumetricDataArgs) -> Sequence[int]:
-        return self._get_spatial_image_for_case(case_name, args.file_type).shape
+    def _get_raw_shape_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Sequence[int]:
+        return self._get_spatial_image_for_case(case_name, self._image_file_type).shape
 
-    def _get_raw_data_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        data = self._get_spatial_image_for_case(case_name, args.file_type).get_fdata()
+    def _get_raw_data_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        data = self._get_spatial_image_for_case(case_name, self._image_file_type).get_fdata()
+        return from_numpy(data).to(get_default_dtype())[None]
+
+    def _get_raw_segmentation_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        data = self._get_spatial_image_for_case(case_name, self._segmentation_file_type).dataobj[
+            ...
+        ]
         return from_numpy(data).to(get_default_dtype())
 
-    def _get_raw_mask_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
-        shape = self._get_raw_shape_for_case(case_name, args)
-        return ones(shape)
+    def _get_raw_mask_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        shape = self._get_raw_shape_for_case(case_name, args, registration_index)
+        return ones(shape)[None]
 
     def _get_path_to_case(self, case_name: str, file_type: str) -> str:
         """Get path to case file"""
@@ -93,3 +139,42 @@ class OasisData(BaseVolumetricRegistrationData):
 
     def _get_spatial_image_for_case(self, case_name: str, file_type: str):
         return nib_load(self._get_path_to_case(case_name, file_type))
+
+
+class OasisDataLearn2Reg(OasisData):
+    """OASIS data with Learn2Reg data splits"""
+
+    VALIDATE_PAIRS = [
+        ("OASIS_OAS1_0438_MR1", "OASIS_OAS1_0439_MR1"),
+        ("OASIS_OAS1_0439_MR1", "OASIS_OAS1_0440_MR1"),
+        ("OASIS_OAS1_0440_MR1", "OASIS_OAS1_0441_MR1"),
+        ("OASIS_OAS1_0441_MR1", "OASIS_OAS1_0442_MR1"),
+        ("OASIS_OAS1_0442_MR1", "OASIS_OAS1_0443_MR1"),
+        ("OASIS_OAS1_0443_MR1", "OASIS_OAS1_0444_MR1"),
+        ("OASIS_OAS1_0444_MR1", "OASIS_OAS1_0445_MR1"),
+        ("OASIS_OAS1_0445_MR1", "OASIS_OAS1_0446_MR1"),
+        ("OASIS_OAS1_0446_MR1", "OASIS_OAS1_0447_MR1"),
+        ("OASIS_OAS1_0447_MR1", "OASIS_OAS1_0448_MR1"),
+        ("OASIS_OAS1_0448_MR1", "OASIS_OAS1_0449_MR1"),
+        ("OASIS_OAS1_0449_MR1", "OASIS_OAS1_0450_MR1"),
+        ("OASIS_OAS1_0450_MR1", "OASIS_OAS1_0451_MR1"),
+        ("OASIS_OAS1_0451_MR1", "OASIS_OAS1_0452_MR1"),
+        ("OASIS_OAS1_0452_MR1", "OASIS_OAS1_0453_MR1"),
+        ("OASIS_OAS1_0453_MR1", "OASIS_OAS1_0454_MR1"),
+        ("OASIS_OAS1_0454_MR1", "OASIS_OAS1_0455_MR1"),
+        ("OASIS_OAS1_0455_MR1", "OASIS_OAS1_0456_MR1"),
+        ("OASIS_OAS1_0456_MR1", "OASIS_OAS1_0457_MR1"),
+    ]
+
+    def _get_validate_pairs(self) -> list[tuple[str, str]]:
+        return self.VALIDATE_PAIRS
+
+    def _get_test_pairs(self) -> list[tuple[str, str]]:
+        return []
+
+    def get_train_cases(self) -> Sequence[str]:
+        all_validate_cases = set()
+        for validate_pair in self.VALIDATE_PAIRS:
+            all_validate_cases.add(validate_pair[0])
+            all_validate_cases.add(validate_pair[1])
+        return [case for case in self._get_cases() if case not in all_validate_cases]

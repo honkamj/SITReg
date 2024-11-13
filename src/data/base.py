@@ -10,41 +10,52 @@ from os.path import isdir, isfile, join
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.error import HTTPError
 
+from composable_mapping import (
+    CoordinateSystem,
+    DataFormat,
+    GridComposableMapping,
+    LinearInterpolator,
+    NearestInterpolator,
+    mappable,
+    samplable_volume,
+)
 from numpy import ones as np_ones
 from numpy.ma import masked_invalid as np_masked_invalid
-from surface_distance import compute_robust_hausdorff, compute_surface_distances  # type: ignore
-from torch import Generator, Tensor, as_tensor, cat, float32
+from surface_distance import (  # type: ignore
+    compute_robust_hausdorff,
+    compute_surface_distances,
+)
+from torch import Generator, Tensor, as_tensor
 from torch import bool as torch_bool
+from torch import cat
 from torch import device as torch_device
-from torch import float64, rand, zeros
-from torch.nn.functional import avg_pool3d
+from torch import empty, float64, get_default_dtype, rand, tensor, zeros
+from torch.nn.functional import avg_pool3d, pad
 from torch.utils.data import DataLoader, Dataset
 
-from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs, as_displacement_field
-from algorithm.composable_mapping.interface import IComposableMapping, VoxelCoordinateSystem
-from algorithm.composable_mapping.masked_tensor import MaskedTensor
+from algorithm.cubic_spline_upsampling import CubicSplineUpsampling
 from algorithm.dense_deformation import generate_voxel_coordinate_grid
 from algorithm.everywhere_differentiable_determinant import calculate_determinant
 from algorithm.finite_difference import estimate_spatial_jacobian_matrices
-from algorithm.interpolator import LinearInterpolator, NearestInterpolator
 from algorithm.spatial_derivatives import estimate_spatial_derivatives
-from data.interface import (
+from util.metrics import ISummarizer, LastSummarizer, MeanSummarizer, StdSummarizer
+
+from .interface import (
     IDataDownloader,
     IEvaluator,
     IInferenceFactory,
     InferenceMetadata,
     IStorageFactory,
+    IVariantDataset,
     IVolumetricRegistrationData,
     IVolumetricRegistrationInferenceDataset,
     VolumetricDataArgs,
 )
-from util.metrics import ISummarizer, LastSummarizer, MeanSummarizer, StdSummarizer
 
 logger = getLogger()
 
 
-class BaseVariantDataset(Dataset):
+class BaseVariantDataset(IVariantDataset):
     """Base dataset which supports generating variants with multiprocessing"""
 
     def __init__(self, seed: int) -> None:
@@ -185,44 +196,86 @@ class BaseInferenceFactory(IInferenceFactory):
     """Base inference factory"""
 
     def get_evaluator_summarizers(self) -> Mapping[str | None, Iterable[ISummarizer]]:
-        return {None: (MeanSummarizer(), StdSummarizer()), "device_name": (LastSummarizer(),)}
+        return {
+            None: (MeanSummarizer(), StdSummarizer()),
+            "device_name": (LastSummarizer(),),
+        }
 
 
 class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
     """Class for accessing volumetric subject-to-subject registration data"""
 
-    def __init__(self, data_root: str, data_downloader: IDataDownloader) -> None:
+    def __init__(
+        self,
+        data_root: str,
+        data_downloader: IDataDownloader,
+        included_segmentation_class_indices: Sequence[int] | None = None,
+        training_segmentation_class_index_groups: Sequence[Sequence[int]] | None = None,
+    ) -> None:
         self._data_location = data_downloader.download(data_root)
+        self._included_segmentation_class_indices = included_segmentation_class_indices
+        self._training_segmentation_class_index_groups = training_segmentation_class_index_groups
 
-    def get_case_shape(self, case_name: str, args: VolumetricDataArgs) -> Sequence[int]:
-        """Get shape for the given case"""
-        shape = self._get_raw_shape_for_case(case_name, args)
-        if args.downsampling_factor is None:
-            downsampling_factor: Sequence[int] = [1] * len(shape)
-        else:
-            downsampling_factor = args.downsampling_factor
+    def _get_output_shape_after_first_crop(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Sequence[int]:
+        shape = self._get_raw_shape_for_case(case_name, args, registration_index)
         if args.crop is None:
             crop: Sequence[tuple[int, int]] = [(0, 0)] * len(shape)
         else:
             crop = args.crop
         return [
-            dim_size // dim_downsampling_factor - crop_left - crop_right
-            for dim_size, dim_downsampling_factor, (crop_left, crop_right) in zip(
-                shape, downsampling_factor, crop
+            (dim_size - crop_left - crop_right)
+            for dim_size, (crop_left, crop_right) in zip(shape, crop)
+        ]
+
+    def get_case_shape(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Sequence[int]:
+        """Get shape for the given case"""
+        if args.crop_or_pad_to is not None:
+            shape_after_crops = args.crop_or_pad_to
+        else:
+            shape_after_crops = self._get_output_shape_after_first_crop(
+                case_name, args, registration_index
             )
+        if args.downsampling_factor is None:
+            downsampling_factor: Sequence[int] = [1] * len(shape_after_crops)
+        else:
+            downsampling_factor = args.downsampling_factor
+        return [
+            dim_size // dim_downsampling_factor
+            for dim_size, dim_downsampling_factor in zip(shape_after_crops, downsampling_factor)
         ]
 
     @abstractmethod
-    def get_case_affine(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
+    def get_case_affine(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
         """Get affine transformation for the given case"""
 
-    def get_case_volume(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
+    def get_case_volume(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
         """Get volume for the given case"""
         return self._modify_volume(
-            self._get_raw_data_for_case(case_name, args),
+            self._get_raw_data_for_case(case_name, args, registration_index),
             modifiers=[
-                self._downsample,
                 self._crop,
+                self._crop_or_pad_to,
+                self._downsample,
                 self._clip,
                 self._shift_and_normalize,
                 self._normalize,
@@ -230,16 +283,57 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
             args=args,
         )
 
-    def get_case_mask(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
+    def get_case_training_segmentation(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        """Get training segmentation (one-hot) for the given case"""
         return self._modify_volume(
-            self._get_raw_mask_for_case(case_name, args),
+            self.get_case_evaluation_segmentation(case_name, args, registration_index),
             modifiers=[
+                self._label_to_one_hot_all,
                 self._downsample,
+                self._one_hot_to_label_all,
+                self._label_to_one_hot_training,
+            ],
+            args=args,
+        )
+
+    def get_case_evaluation_segmentation(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        """Get segmentation for the given case"""
+        return self._modify_volume(
+            self._get_raw_segmentation_for_case(case_name, args, registration_index),
+            modifiers=[
                 self._crop,
+                self._crop_or_pad_to,
+            ],
+            args=args,
+        )
+
+    def get_case_mask(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        mask = self._modify_volume(
+            self._get_raw_mask_for_case(case_name, args, registration_index),
+            modifiers=[
+                self._crop,
+                self._crop_or_pad_to,
+                self._downsample,
                 self._threshold_mask,
             ],
             args=args,
         )
+        return mask
 
     @staticmethod
     def _modify_volume(
@@ -253,16 +347,93 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
         return modified
 
     @abstractmethod
-    def _get_raw_shape_for_case(self, case_name: str, args: VolumetricDataArgs) -> Sequence[int]:
+    def _get_raw_shape_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Sequence[int]:
         """Get case shape before any modifications"""
 
     @abstractmethod
-    def _get_raw_mask_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
+    def _get_raw_mask_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
         """Get raw mask for case"""
 
+    def _get_raw_segmentation_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
+        """Get raw segmentation for case"""
+        raise NotImplementedError()
+
     @abstractmethod
-    def _get_raw_data_for_case(self, case_name: str, args: VolumetricDataArgs) -> Tensor:
+    def _get_raw_data_for_case(
+        self,
+        case_name: str,
+        args: VolumetricDataArgs,
+        registration_index: int,
+    ) -> Tensor:
         """Get raw data for case"""
+
+    def _label_to_one_hot_training(
+        self,
+        segmentation_labels: Tensor,
+        args: VolumetricDataArgs,  # pylint: disable=unused-argument
+    ) -> Tensor:
+        if self._training_segmentation_class_index_groups is None:
+            raise ValueError("Please specify segmentation class indices")
+        return self._label_to_one_hot(
+            segmentation_labels=segmentation_labels,
+            label_class_index_groups=self._training_segmentation_class_index_groups,
+        )
+
+    def _label_to_one_hot_all(
+        self,
+        segmentation_labels: Tensor,
+        args: VolumetricDataArgs,  # pylint: disable=unused-argument
+    ) -> Tensor:
+        if self._included_segmentation_class_indices is None:
+            raise ValueError("Please specify included segmentation class indices")
+        return self._label_to_one_hot(
+            segmentation_labels=segmentation_labels,
+            label_class_index_groups=[
+                (index,) for index in self._included_segmentation_class_indices
+            ],
+        )
+
+    def _one_hot_to_label_all(
+        self,
+        segmentation_one_hot: Tensor,
+        args: VolumetricDataArgs,  # pylint: disable=unused-argument
+    ) -> Tensor:
+        if self._included_segmentation_class_indices is None:
+            raise ValueError("Please specify included segmentation class indices")
+        enumerated_segmentation_labels = segmentation_one_hot.argmax(dim=0)
+        segmentation_labels = empty(enumerated_segmentation_labels.shape, dtype=get_default_dtype())
+        for index, label_index in enumerate(self._included_segmentation_class_indices):
+            segmentation_labels[enumerated_segmentation_labels == index] = label_index
+        return segmentation_labels
+
+    @staticmethod
+    def _label_to_one_hot(
+        segmentation_labels: Tensor,
+        label_class_index_groups: Sequence[Sequence[int]],
+    ) -> Tensor:
+        segmentation_one_hot = zeros(
+            (len(label_class_index_groups),) + segmentation_labels.shape,
+            dtype=get_default_dtype(),
+        )
+        for index, class_indices in enumerate(label_class_index_groups):
+            for class_index in class_indices:
+                segmentation_one_hot[index][segmentation_labels == class_index] = 1.0
+        return segmentation_one_hot
 
     @staticmethod
     def _downsample(image: Tensor, args: VolumetricDataArgs) -> Tensor:
@@ -270,24 +441,47 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
             factor == 1 for factor in args.downsampling_factor
         ):
             return image
-        downsampled = avg_pool3d(
-            input=image[None, None],
+        original_ndim = image.ndim
+        if original_ndim < 5:
+            image = image[(None,) * (5 - original_ndim)]
+        downsampled = avg_pool3d(  # pylint: disable=not-callable
+            input=image,
             kernel_size=tuple(args.downsampling_factor),
             stride=tuple(args.downsampling_factor),
-        )[0, 0]
-        if "seg" in args.file_type:
-            downsampled = downsampled.round()
+        )
+        if original_ndim < 5:
+            downsampled = downsampled[(0,) * (5 - original_ndim)]
         return downsampled
 
     @staticmethod
     def _crop(image: Tensor, args: VolumetricDataArgs) -> Tensor:
         if args.crop is None:
             return image
-        crop_slice = tuple(
+        crop_slice = (...,) + tuple(
             slice(crop_left, -crop_right) if crop_right != 0 else slice(crop_left, None)
             for crop_left, crop_right in args.crop
         )
         return image[crop_slice].clone()
+
+    @staticmethod
+    def _crop_or_pad_to(image: Tensor, args: VolumetricDataArgs) -> Tensor:
+        if args.crop_or_pad_to is None:
+            return image
+        target_shape = args.crop_or_pad_to
+        current_shape = image.shape
+        padding = []
+        slices: list[slice] = []
+        for target, current in zip(reversed(target_shape), reversed(current_shape)):
+            if current > target:
+                slices.insert(0, slice((current - target) // 2, -((current - target + 1) // 2)))
+            else:
+                slices.insert(0, slice(None))
+            padding.extend([max((target - current) // 2, 0), max((target - current + 1) // 2, 0)])
+        if padding:
+            image = pad(image, padding)
+        if slices:
+            image = image[(...,) + tuple(slices)]
+        return image
 
     @staticmethod
     def _normalize(image: Tensor, args: VolumetricDataArgs) -> Tensor:
@@ -336,10 +530,6 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
     def get_train_cases(self) -> Sequence[str]:
         """Get training cases"""
 
-    @abstractmethod
-    def _get_cases(self) -> list[str]:
-        """Get all cases"""
-
 
 class BaseVolumetricRegistrationInferenceFactory(BaseInferenceFactory):
     """Oasis inference factory"""
@@ -378,10 +568,15 @@ class BaseVolumetricRegistrationInferenceFactory(BaseInferenceFactory):
             raise RuntimeError("No multiprocessing suppport (nor need).")
         return DataLoader(dataset=SequenceDataset([self._dataset[index]]))
 
-    def generate_dummy_batch_and_metadata(self) -> tuple[tuple[Tensor, Tensor], InferenceMetadata]:
+    def generate_dummy_batch_and_metadata(
+        self,
+    ) -> tuple[tuple[Tensor, Tensor], InferenceMetadata]:
         image_1_shape, image_2_shape = self._dataset.shapes(0)
         image_1_affine, image_2_affine = self._dataset.affines(0)
-        batch = (zeros((1, 1) + tuple(image_1_shape)), zeros((1, 1) + tuple(image_2_shape)))
+        batch = (
+            zeros((1, 1) + tuple(image_1_shape)),
+            zeros((1, 1) + tuple(image_2_shape)),
+        )
         return (
             batch,
             InferenceMetadata(
@@ -401,76 +596,30 @@ class BaseVolumetricRegistrationInferenceFactory(BaseInferenceFactory):
         )
 
 
-class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
-    """Base volumetric registration segmentation evaluator"""
+class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
+    """Base volumetric registration evaluator"""
 
     def __init__(
         self,
-        source_mask_seg: Tensor,
-        target_mask_seg: Tensor,
         metrics_to_compute: Sequence[str],
-        source_temp_storage_factory: IStorageFactory,
-        source_name: str,
-        target_temp_storage_factory: IStorageFactory,
-        target_name: str,
         n_jacobian_samples: int | None = None,
         jacobian_sampling_seed: int | None = None,
         evaluation_prefix: str = "",
     ) -> None:
         super().__init__()
         self._metrics_to_compute = metrics_to_compute
-        self._source_mask_seg = source_mask_seg
-        self._target_mask_seg = target_mask_seg
-        self._source_temp_storage_factory = source_temp_storage_factory
-        self._source_name = source_name
-        self._target_temp_storage_factory = target_temp_storage_factory
-        self._target_name = target_name
         self._n_jacobian_samples = n_jacobian_samples
         self._jacobian_sampling_seed = jacobian_sampling_seed
         self._evaluation_prefix = evaluation_prefix
 
-    @property
-    @abstractmethod
-    def _names_to_indices_seg(self) -> Mapping[str, Sequence[int]]:
-        """Get names to indices of the segmentation mask"""
-
     def __call__(self, inference_outputs: Mapping[str, Any]) -> Mapping[str, float]:
         device: torch_device | None = None
         metrics: dict[str, int | float] = {}
-        evaluation_temp_folder = environ.get("EVALUATION_TEMP_FOLDER")
-        if evaluation_temp_folder is not None:
-            source_seg_storage = self._source_temp_storage_factory.create(
-                f"{self._source_name}_seg"
-            )
-            target_seg_storage = self._source_temp_storage_factory.create(
-                f"{self._target_name}_seg"
-            )
-            source_seg_storage.save(self._source_mask_seg, evaluation_temp_folder)
-            target_seg_storage.save(self._target_mask_seg, evaluation_temp_folder)
         for index, forward_displacement_field in enumerate(
             inference_outputs["forward_displacement_field"]
         ):
             if forward_displacement_field is not None:
                 device = forward_displacement_field.device
-                transformed_source_mask_seg = self._transform_mask(
-                    mask=self._source_mask_seg,
-                    displacement_field=forward_displacement_field,
-                )
-                if evaluation_temp_folder is not None:
-                    forward_seg_resampled_storage = self._source_temp_storage_factory.create(
-                        f"{self._source_name}-{self._target_name}_seg_resampled"
-                    )
-                    forward_seg_resampled_storage.save(
-                        transformed_source_mask_seg, evaluation_temp_folder
-                    )
-
-                metrics.update(
-                    self._compute_segmentation_metrics(
-                        mask_1_seg=transformed_source_mask_seg,
-                        mask_2_seg=self._target_mask_seg,
-                        prefix=f"{self._evaluation_prefix}input_order_{index}_forward_",
-                    )
-                )
                 metrics.update(
                     self._compute_determinant_metrics(
                         displacement_field=forward_displacement_field,
@@ -482,24 +631,6 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         ):
             if inverse_displacement_field is not None:
                 device = inverse_displacement_field.device
-                transformed_target_mask_seg = self._transform_mask(
-                    mask=self._target_mask_seg,
-                    displacement_field=inverse_displacement_field,
-                )
-                if evaluation_temp_folder is not None:
-                    inverse_seg_resampled_storage = self._target_temp_storage_factory.create(
-                        f"{self._target_name}-{self._source_name}_seg_resampled"
-                    )
-                    inverse_seg_resampled_storage.save(
-                        transformed_target_mask_seg, evaluation_temp_folder
-                    )
-                metrics.update(
-                    self._compute_segmentation_metrics(
-                        mask_1_seg=transformed_target_mask_seg,
-                        mask_2_seg=self._source_mask_seg,
-                        prefix=f"{self._evaluation_prefix}input_order_{index}_inverse_",
-                    )
-                )
                 metrics.update(
                     self._compute_determinant_metrics(
                         displacement_field=inverse_displacement_field,
@@ -533,42 +664,315 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
                         inverse_displacement_field=inference_outputs["forward_displacement_field"][
                             index_0
                         ],
-                        prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_reverse_",
+                        prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_reverse_",  # pylint: disable=line-too-long
                     )
                 )
         if "forward_mapping" in inference_outputs:
-            for index, (mapping, coordinate_system) in enumerate(
-                zip(
-                    inference_outputs["forward_mapping"],
-                    inference_outputs["mapping_coordinate_system"],
-                )
-            ):
+            for index, mapping in enumerate(inference_outputs["forward_mapping"]):
                 if mapping is not None:
                     metrics.update(
                         self._compute_sampled_determinant_metrics(
                             mapping=mapping,
-                            coordinate_system=coordinate_system,
                             prefix=f"{self._evaluation_prefix}input_order_{index}_sampled_forward_",
                             device=device,
                         )
                     )
         if "inverse_mapping" in inference_outputs:
-            for index, (mapping, coordinate_system) in enumerate(
-                zip(
-                    inference_outputs["inverse_mapping"],
-                    inference_outputs["mapping_coordinate_system"],
-                )
-            ):
+            for index, mapping in enumerate(inference_outputs["inverse_mapping"]):
                 if mapping is not None:
                     metrics.update(
                         self._compute_sampled_determinant_metrics(
                             mapping=mapping,
-                            coordinate_system=coordinate_system,
                             prefix=f"{self._evaluation_prefix}input_order_{index}_sampled_inverse_",
                             device=device,
                         )
                     )
-        return super().__call__(inference_outputs) | metrics
+        return dict(super().__call__(inference_outputs)) | metrics
+
+    def _compute_inverse_consistency_metrics(
+        self,
+        forward_displacement_field: Tensor,
+        inverse_displacement_field: Tensor,
+        prefix: str,
+    ) -> dict[str, int | float]:
+        if "inverse_consistency" not in self._metrics_to_compute:
+            return {}
+        forward_displacement_field = forward_displacement_field[None]
+        inverse_displacement_field = inverse_displacement_field[None]
+        coordinate_system = CoordinateSystem.centered_normalized(
+            spatial_shape=forward_displacement_field.shape[2:],
+            dtype=forward_displacement_field.dtype,
+            device=forward_displacement_field.device,
+        )
+        forward_mapping = samplable_volume(
+            forward_displacement_field,
+            coordinate_system=coordinate_system,
+            sampler=LinearInterpolator(),
+            data_format=DataFormat.voxel_displacements(),
+        )
+        inverse_mapping = samplable_volume(
+            inverse_displacement_field,
+            coordinate_system=coordinate_system,
+            sampler=LinearInterpolator(),
+            data_format=DataFormat.voxel_displacements(),
+        )
+        forward_composition_ddf, forward_composition_mask = (
+            (forward_mapping @ inverse_mapping).sample(DataFormat.voxel_displacements()).generate()
+        )
+        assert forward_composition_mask is not None
+        forward_composition_n_voxels = forward_composition_mask.sum()
+        forward_composition_ddf_masked = forward_composition_ddf * forward_composition_mask
+        return {
+            f"{prefix}inverse_consistency_mse": forward_composition_ddf.square().mean().item(),
+            f"{prefix}inverse_consistency_mse_masked": (
+                forward_composition_ddf_masked.square().sum() / (3 * forward_composition_n_voxels)
+            ).item(),
+            f"{prefix}inverse_consistency_mae": forward_composition_ddf.abs().mean().item(),
+            f"{prefix}inverse_consistency_mae_masked": (
+                forward_composition_ddf_masked.abs().sum() / (3 * forward_composition_n_voxels)
+            ).item(),
+            f"{prefix}inverse_consistency_max": forward_composition_ddf.abs().max().item(),
+            f"{prefix}inverse_consistency_max_masked": forward_composition_ddf_masked.abs()
+            .max()
+            .item(),
+        }
+
+    def _compute_determinant_metrics(
+        self, displacement_field: Tensor, prefix: str
+    ) -> dict[str, int | float]:
+        if "determinant" not in self._metrics_to_compute:
+            return {}
+        n_negative_determinants_avg, det_std_avg = self._determinant_metrics(
+            displacement_field, other_dims="average", central=False
+        )
+        (
+            n_negative_determinants_crop_last,
+            det_std_crop_last,
+        ) = self._determinant_metrics(displacement_field, other_dims="crop_last", central=False)
+        n_negative_determinants_central, det_std_central = self._determinant_metrics(
+            displacement_field, other_dims="crop", central=True
+        )
+        n_voxels = int(
+            as_tensor(displacement_field.shape[1:], device=displacement_field.device).prod()
+        )
+        return {
+            f"{prefix}n_negative_determinants_avg_along_other_dims": n_negative_determinants_avg,
+            f"{prefix}proportion_negative_determinants_avg_along_other_dims": (
+                n_negative_determinants_avg / n_voxels
+            ),
+            f"{prefix}det_std_avg_along_other_dims": det_std_avg,
+            f"{prefix}n_negative_determinants_crop_last_along_other_dims": (
+                n_negative_determinants_crop_last
+            ),
+            f"{prefix}proportion_negative_determinants_crop_last_along_other_dims": (
+                n_negative_determinants_crop_last / n_voxels
+            ),
+            f"{prefix}det_std_crop_last_along_other_dims": det_std_crop_last,
+            f"{prefix}n_negative_determinants_central": n_negative_determinants_central,
+            f"{prefix}proportion_negative_determinants_central": n_negative_determinants_central
+            / n_voxels,
+            f"{prefix}det_std_central": det_std_central,
+        }
+
+    def _compute_sampled_determinant_metrics(
+        self,
+        mapping: GridComposableMapping,
+        prefix: str,
+        device: torch_device | None,
+    ) -> dict[str, int | float]:
+        if "sampled_determinant" not in self._metrics_to_compute:
+            return {}
+        if self._n_jacobian_samples is None or self._jacobian_sampling_seed is None:
+            raise ValueError(
+                "Number of Jacobian samples and Jacobian sampling seed "
+                "is required for sampled determinant metrics."
+            )
+        mapping = mapping.cast(dtype=float64)
+        n_dims = len(mapping.coordinate_system.spatial_shape)
+        grid = mapping.coordinate_system.grid.generate_values()
+        bounds = cat(
+            [
+                grid.amin(dim=list(range(2, grid.ndim))),
+                grid.amax(dim=list(range(2, grid.ndim))),
+            ],
+            dim=0,
+        ).to(float64)
+        generator = Generator(device=device).manual_seed(self._jacobian_sampling_seed)
+        evaluation_points = (
+            rand(
+                size=(1, self._n_jacobian_samples, n_dims),
+                device=device,
+                dtype=float64,
+                generator=generator,
+            )
+            * (bounds[1] - bounds[0])
+            + bounds[0]
+        ).permute((0, 2, 1))
+        jacobian_matrices = estimate_spatial_derivatives(
+            mapping=lambda x: mapping(mappable(x)).generate_values(),
+            points=evaluation_points,
+            perturbation=mapping.coordinate_system.grid_spacing().reshape(-1, n_dims)[0, 0].item()
+            * 1e-7,
+        )
+        determinants = calculate_determinant(jacobian_matrices)
+        n_neg_det = int((determinants < 0).sum())
+        det_std = float(determinants.std())
+        n_voxels = int(evaluation_points.size(2))
+        return {
+            f"{prefix}n_negative_determinants": n_neg_det,
+            f"{prefix}proportion_negative_determinants": (n_neg_det / n_voxels),
+            f"{prefix}det_std": det_std,
+        }
+
+    @staticmethod
+    def _determinant_metrics(
+        displacement_field: Tensor, other_dims: str, central: bool
+    ) -> tuple[int, float]:
+        mapping = displacement_field[None] + generate_voxel_coordinate_grid(
+            displacement_field.shape[1:],
+            device=displacement_field.device,
+            dtype=displacement_field.dtype,
+        )
+        jacobian_matrices = estimate_spatial_jacobian_matrices(
+            volume=mapping, other_dims=other_dims, central=central
+        )
+        determinants = calculate_determinant(jacobian_matrices)
+        n_neg_det = int((determinants < 0).sum())
+        det_std = float(determinants.std())
+        return n_neg_det, det_std
+
+    @property
+    def evaluation_inference_outputs(self) -> set[str]:
+        return {
+            "forward_displacement_field",
+            "inverse_displacement_field",
+        } | super().evaluation_inference_outputs
+
+
+class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistrationEvaluator):
+    """Base volumetric registration segmentation evaluator"""
+
+    def __init__(
+        self,
+        source_mask_seg: Tensor,
+        target_mask_seg: Tensor,
+        metrics_to_compute: Sequence[str],
+        source_temp_storage_factory: IStorageFactory,
+        source_name: str,
+        target_temp_storage_factory: IStorageFactory,
+        target_name: str,
+        n_jacobian_samples: int | None = None,
+        jacobian_sampling_seed: int | None = None,
+        evaluation_prefix: str = "",
+        upsampling_factor: Sequence[int] | None = None,
+    ) -> None:
+        super().__init__(
+            metrics_to_compute=metrics_to_compute,
+            n_jacobian_samples=n_jacobian_samples,
+            jacobian_sampling_seed=jacobian_sampling_seed,
+            evaluation_prefix=evaluation_prefix,
+        )
+        self._source_mask_seg = source_mask_seg
+        self._target_mask_seg = target_mask_seg
+        self._source_temp_storage_factory = source_temp_storage_factory
+        self._source_name = source_name
+        self._target_temp_storage_factory = target_temp_storage_factory
+        self._target_name = target_name
+        self._upsampling_factor = upsampling_factor
+
+    @property
+    @abstractmethod
+    def _names_to_indices_seg(self) -> Mapping[str, Sequence[int]]:
+        """Get names to indices of the segmentation mask"""
+
+    def _upsample_displacement_fields(
+        self, inference_outputs: Mapping[str, Any]
+    ) -> Mapping[str, Sequence[Tensor | None]]:
+        upsampled_ddfs: dict[str, Sequence[Tensor | None]] = {}
+        for ddf_key in ["forward_displacement_field", "inverse_displacement_field"]:
+            updated_ddfs: list[Tensor | None] = []
+            for ddf in inference_outputs[ddf_key]:
+                if ddf is None:
+                    updated_ddfs.append(None)
+                    continue
+                if self._upsampling_factor is None:
+                    upsampling_factor = (1,) * (ddf.ndim - 1)
+                else:
+                    upsampling_factor = self._upsampling_factor
+                scaling_factor = tensor(upsampling_factor, device=ddf.device, dtype=ddf.dtype)[
+                    (...,) + (None,) * (ddf.ndim - 1)
+                ]
+                upsampler = CubicSplineUpsampling(
+                    upsampling_factor=upsampling_factor, dtype=ddf.dtype
+                )
+                upsampler.to(ddf.device)
+                upsampled_ddf = (
+                    upsampler(ddf[None], apply_prefiltering=True, prefilter_inplace=True)[0]
+                    * scaling_factor
+                )
+                updated_ddfs.append(upsampled_ddf)
+            upsampled_ddfs[ddf_key] = updated_ddfs
+        return upsampled_ddfs
+
+    def __call__(self, inference_outputs: Mapping[str, Any]) -> Mapping[str, float]:
+        upsampled_ddfs = self._upsample_displacement_fields(inference_outputs)
+        metrics: dict[str, int | float] = {}
+        evaluation_temp_folder = environ.get("EVALUATION_TEMP_FOLDER")
+        if evaluation_temp_folder is not None:
+            source_seg_storage = self._source_temp_storage_factory.create(
+                f"{self._source_name}_seg"
+            )
+            target_seg_storage = self._source_temp_storage_factory.create(
+                f"{self._target_name}_seg"
+            )
+            source_seg_storage.save(self._source_mask_seg, evaluation_temp_folder)
+            target_seg_storage.save(self._target_mask_seg, evaluation_temp_folder)
+        for index, forward_displacement_field in enumerate(
+            upsampled_ddfs["forward_displacement_field"]
+        ):
+            if forward_displacement_field is not None:
+                transformed_source_mask_seg = self._transform_mask(
+                    mask=self._source_mask_seg,
+                    displacement_field=forward_displacement_field,
+                )
+                if evaluation_temp_folder is not None:
+                    forward_seg_resampled_storage = self._source_temp_storage_factory.create(
+                        f"{self._source_name}-{self._target_name}_seg_resampled"
+                    )
+                    forward_seg_resampled_storage.save(
+                        transformed_source_mask_seg, evaluation_temp_folder
+                    )
+
+                metrics.update(
+                    self._compute_segmentation_metrics(
+                        mask_1_seg=transformed_source_mask_seg,
+                        mask_2_seg=self._target_mask_seg,
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_forward_",
+                    )
+                )
+        for index, inverse_displacement_field in enumerate(
+            upsampled_ddfs["inverse_displacement_field"]
+        ):
+            if inverse_displacement_field is not None:
+                transformed_target_mask_seg = self._transform_mask(
+                    mask=self._target_mask_seg,
+                    displacement_field=inverse_displacement_field,
+                )
+                if evaluation_temp_folder is not None:
+                    inverse_seg_resampled_storage = self._target_temp_storage_factory.create(
+                        f"{self._target_name}-{self._source_name}_seg_resampled"
+                    )
+                    inverse_seg_resampled_storage.save(
+                        transformed_target_mask_seg, evaluation_temp_folder
+                    )
+                metrics.update(
+                    self._compute_segmentation_metrics(
+                        mask_1_seg=transformed_target_mask_seg,
+                        mask_2_seg=self._source_mask_seg,
+                        prefix=f"{self._evaluation_prefix}input_order_{index}_inverse_",
+                    )
+                )
+        return dict(super().__call__(inference_outputs)) | metrics
 
     def _compute_segmentation_metrics(
         self,
@@ -597,30 +1001,29 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         return metrics
 
     def _transform_mask(self, mask: Tensor, displacement_field: Tensor) -> Tensor:
+        if mask is None:
+            return None
         mask = mask[None]
         displacement_field = displacement_field[None]
-        coordinate_system = CoordinateSystemFactory.centered_normalized(
-            original_grid_shape=mask.shape[2:], voxel_size=(1.0, 1.0, 1.0)
+        coordinate_system = CoordinateSystem.centered_normalized(
+            spatial_shape=mask.shape[2:],
+            dtype=mask.dtype,
+            device=mask.device,
         )
-        mask_mapping = ComposableFactory.create_volume(
-            data=mask,
+        mask_mapping = samplable_volume(
+            mask,
             coordinate_system=coordinate_system,
-            grid_mapping_args=GridMappingArgs(
-                interpolator=NearestInterpolator(padding_mode="zeros"), mask_outside_fov=True
-            ),
+            sampler=NearestInterpolator(),
         )
-        displacement_field_mapping = ComposableFactory.create_dense_mapping(
-            displacement_field=displacement_field,
+        deformation = samplable_volume(
+            displacement_field,
             coordinate_system=coordinate_system,
-            grid_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(), mask_outside_fov=False
-            ),
+            sampler=LinearInterpolator(),
+            data_format=DataFormat.voxel_displacements(),
         )
-        transformed_mask_masked = mask_mapping.compose(displacement_field_mapping)(
-            coordinate_system.grid
-        )
-        transformed_mask = transformed_mask_masked.generate_values().round()
-        transformed_mask_mask = transformed_mask_masked.generate_mask().bool()
+        transformed_mask_sampled = (mask_mapping @ deformation).sample()
+        transformed_mask = transformed_mask_sampled.generate_values().round()
+        transformed_mask_mask = transformed_mask_sampled.generate_mask().bool()
         masked_transformed_mask = transformed_mask[0] * transformed_mask_mask[0]
         return masked_transformed_mask
 
@@ -659,161 +1062,3 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseEvaluator):
         intersection = (mask_1 & mask_2).sum()
         union = mask_1.sum() + mask_2.sum()
         return (2 * intersection / union).item()
-
-    def _compute_inverse_consistency_metrics(
-        self,
-        forward_displacement_field: Tensor,
-        inverse_displacement_field: Tensor,
-        prefix: str,
-    ) -> dict[str, int | float]:
-        if "inverse_consistency" not in self._metrics_to_compute:
-            return {}
-        forward_displacement_field = forward_displacement_field[None]
-        inverse_displacement_field = inverse_displacement_field[None]
-        coordinate_system = CoordinateSystemFactory.centered_normalized(
-            original_grid_shape=forward_displacement_field.shape[2:], voxel_size=(1.0, 1.0, 1.0)
-        )
-        forward_mapping = ComposableFactory.create_dense_mapping(
-            displacement_field=forward_displacement_field,
-            coordinate_system=coordinate_system,
-            grid_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(), mask_outside_fov=True
-            ),
-        )
-        inverse_mapping = ComposableFactory.create_dense_mapping(
-            displacement_field=inverse_displacement_field,
-            coordinate_system=coordinate_system,
-            grid_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(), mask_outside_fov=True
-            ),
-        )
-        forward_composition_ddf, forward_composition_mask = as_displacement_field(
-            forward_mapping.compose(inverse_mapping), coordinate_system=coordinate_system
-        )
-        assert forward_composition_mask is not None
-        forward_composition_n_voxels = forward_composition_mask.sum()
-        forward_composition_ddf_masked = forward_composition_ddf * forward_composition_mask
-        return {
-            f"{prefix}inverse_consistency_mse": forward_composition_ddf.square().mean().item(),
-            f"{prefix}inverse_consistency_mse_masked": (
-                forward_composition_ddf_masked.square().sum() / (3 * forward_composition_n_voxels)
-            ).item(),
-            f"{prefix}inverse_consistency_mae": forward_composition_ddf.abs().mean().item(),
-            f"{prefix}inverse_consistency_mae_masked": (
-                forward_composition_ddf_masked.abs().sum() / (3 * forward_composition_n_voxels)
-            ).item(),
-            f"{prefix}inverse_consistency_max": forward_composition_ddf.abs().max().item(),
-            f"{prefix}inverse_consistency_max_masked": forward_composition_ddf_masked.abs()
-            .max()
-            .item(),
-        }
-
-    def _compute_determinant_metrics(
-        self, displacement_field: Tensor, prefix: str
-    ) -> dict[str, int | float]:
-        if "determinant" not in self._metrics_to_compute:
-            return {}
-        n_negative_determinants_avg, det_std_avg = self._determinant_metrics(
-            displacement_field, other_dims="average", central=False
-        )
-        n_negative_determinants_crop_last, det_std_crop_last = self._determinant_metrics(
-            displacement_field, other_dims="crop_last", central=False
-        )
-        n_negative_determinants_central, det_std_central = self._determinant_metrics(
-            displacement_field, other_dims="crop", central=True
-        )
-        n_voxels = int(
-            as_tensor(displacement_field.shape[1:], device=displacement_field.device).prod()
-        )
-        return {
-            f"{prefix}n_negative_determinants_avg_along_other_dims": n_negative_determinants_avg,
-            f"{prefix}proportion_negative_determinants_avg_along_other_dims": (
-                n_negative_determinants_avg / n_voxels
-            ),
-            f"{prefix}det_std_avg_along_other_dims": det_std_avg,
-            f"{prefix}n_negative_determinants_crop_last_along_other_dims": (
-                n_negative_determinants_crop_last
-            ),
-            f"{prefix}proportion_negative_determinants_crop_last_along_other_dims": (
-                n_negative_determinants_crop_last / n_voxels
-            ),
-            f"{prefix}det_std_crop_last_along_other_dims": det_std_crop_last,
-            f"{prefix}n_negative_determinants_central": n_negative_determinants_central,
-            f"{prefix}proportion_negative_determinants_central": n_negative_determinants_central
-            / n_voxels,
-            f"{prefix}det_std_central": det_std_central,
-        }
-
-    def _compute_sampled_determinant_metrics(
-        self,
-        mapping: IComposableMapping,
-        coordinate_system: VoxelCoordinateSystem,
-        prefix: str,
-        device: torch_device | None,
-    ) -> dict[str, int | float]:
-        if "sampled_determinant" not in self._metrics_to_compute:
-            return {}
-        if self._n_jacobian_samples is None or self._jacobian_sampling_seed is None:
-            raise ValueError(
-                "Number of Jacobian samples and Jacobian sampling seed "
-                "is required for sampled determinant metrics."
-            )
-        mapping = mapping.to_dtype(float64)
-        n_dims = len(coordinate_system.grid_spacing)
-        grid = coordinate_system.grid.generate_values(device=device, dtype=float32)
-        bounds = cat(
-            [
-                grid.amin(dim=list(range(2, grid.ndim))),
-                grid.amax(dim=list(range(2, grid.ndim))),
-            ],
-            dim=0,
-        ).to(float64)
-        generator = Generator(device=device).manual_seed(self._jacobian_sampling_seed)
-        evaluation_points = (
-            rand(
-                size=(1, self._n_jacobian_samples, n_dims),
-                device=device,
-                dtype=float64,
-                generator=generator,
-            )
-            * (bounds[1] - bounds[0])
-            + bounds[0]
-        ).permute((0, 2, 1))
-        jacobian_matrices = estimate_spatial_derivatives(
-            mapping=lambda x: mapping(MaskedTensor(x)).generate_values(),
-            points=evaluation_points,
-            perturbation=coordinate_system.grid_spacing[0] * 1e-7,
-        )
-        determinants = calculate_determinant(jacobian_matrices)
-        n_neg_det = int((determinants < 0).sum())
-        det_std = float(determinants.std())
-        n_voxels = int(evaluation_points.size(2))
-        return {
-            f"{prefix}n_negative_determinants": n_neg_det,
-            f"{prefix}proportion_negative_determinants": (n_neg_det / n_voxels),
-            f"{prefix}det_std": det_std,
-        }
-
-    @staticmethod
-    def _determinant_metrics(
-        displacement_field: Tensor, other_dims: str, central: bool
-    ) -> tuple[int, float]:
-        mapping = displacement_field[None] + generate_voxel_coordinate_grid(
-            displacement_field.shape[1:],
-            device=displacement_field.device,
-            dtype=displacement_field.dtype,
-        )
-        jacobian_matrices = estimate_spatial_jacobian_matrices(
-            volume=mapping, other_dims=other_dims, central=central
-        )
-        determinants = calculate_determinant(jacobian_matrices)
-        n_neg_det = int((determinants < 0).sum())
-        det_std = float(determinants.std())
-        return n_neg_det, det_std
-
-    @property
-    def evaluation_inference_outputs(self) -> set[str]:
-        return {
-            "forward_displacement_field",
-            "inverse_displacement_field",
-        } | super().evaluation_inference_outputs

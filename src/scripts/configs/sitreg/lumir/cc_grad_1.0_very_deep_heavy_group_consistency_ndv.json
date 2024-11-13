@@ -1,0 +1,163 @@
+{
+    "data": {
+        "module": "lumir",
+        "config": {
+            "included_segmentation_class_indices": [],
+            "batch_size": 1,
+            "n_training_items_per_step": 3,
+            "training_process_chunk_size": 3,
+            "iterate_inference_pairs_in_both_directions": false,
+            "downsampling_factor": [1, 1, 1],
+            "crop": [[0, 0], [0, 0], [0, 0]],
+            "normalize": false,
+            "shift_and_normalize": [0.0, 255.0],
+            "seed": 123456789,
+            "file_type": "0000",
+            "segmentation_file_type": null,
+            "n_training_items_per_epoch": 2000,
+            "n_training_cases": null,
+            "metrics": {
+		    	"validate": ["dice", "sampled_determinant", "inverse_consistency"],
+                "sanity_check": ["dice", "sampled_determinant", "inverse_consistency"],
+		    	"test": ["dice", "hd95", "sampled_determinant", "inverse_consistency"]
+		    },
+            "n_jacobian_samples_in_evaluation": 1000000,
+            "jacobian_sampling_base_seed": 8524561973,
+            "use_body_mask_as_mask_with_erosion": 0
+        }
+    },
+    "application": {
+        "training_factory": "application.sitreg.interface.create_distributed_consistency_training_definition",
+        "inference_factory": "application.sitreg.interface.create_inference_definition",
+        "config": {
+            "inference": {
+        		"save_intermediate_mappings_for_levels": null,
+                "do_reverse_inference": true,
+                "save_as_composable_mapping": true,
+                "resample_when_composing": true
+        	},
+            "model": {
+                "n_features_per_resolution": [
+                    12,
+                    32,
+                    64,
+                    128,
+                    128,
+                    128
+                ],
+                "n_feature_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "n_transformation_features_per_resolution": [
+                    12,
+                    64,
+                    128,
+                    256,
+                    256,
+                    256
+                ],
+                "n_transformation_convolutions_per_resolution": [
+                    2,
+                    2,
+                    2,
+                    2,
+                    2,
+                    2
+                ],
+                "max_control_point_multiplier": 0.99,
+                "transformation_downsampling_factor": [1.0, 1.0, 1.0],
+                "predict_affine": false,
+                "normalizer": {
+                    "type": "GroupNormalizerFactory",
+                    "args": {
+                        "n_groups": 4
+                    }
+                },
+                "activation": {
+                    "type": "ReLUFactory"
+                },
+                "n_input_channels": 1,
+                "voxel_size": [1.0, 1.0, 1.0],
+                "input_shape": [160, 224, 192],
+                "displacement_field_inversion": {
+                    "forward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "deformation_inversion_layer.fixed_point_iteration.MaxElementWiseAbsStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "threshold": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    },
+                    "backward_fixed_point_solver": {
+                        "stop_criterion": {
+                            "type": "deformation_inversion_layer.fixed_point_iteration.RelativeL2ErrorStopCriterion",
+                            "args": {
+                                "min_iterations": 2,
+                                "max_iterations": 50,
+                                "threshold": 1e-2
+                            }
+                        },
+                        "arguments": {
+                            "memory_length": 4
+                        }
+                    }
+                }
+            },
+            "training": {
+                "n_epochs": 45,
+                "optimizer": {
+                    "learning_rate": 1e-4,
+                    "betas": [0.9, 0.999]
+                },
+                "ignore_mask": false,
+                "loss": {
+                    "similarity": [
+                        [
+                            {
+                                "name": "ncc",
+                                "type": "LocalNormalizedCrossCorrelationLoss",
+                                "args": {
+                                    "window_size": 11,
+                                    "separable": true
+                                }
+                            }
+                        ]
+                    ],
+                    "regularity": [
+                        [
+                            {
+                                "name": "gradient",
+                                "type": "GradientDeformationLoss",
+                                "weight": 1.0
+                            },
+                            {
+                                "name": "ndv",
+                                "type": "NDVLoss",
+                                "weight": 1e-5
+                            }
+                        ]
+                    ],
+                    "consistency_loss_weight_per_epoch": [
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 4.0e1
+                    ]
+                }
+            }
+        }
+    }
+}

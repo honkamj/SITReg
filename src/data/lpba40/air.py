@@ -4,13 +4,11 @@ from ctypes import Structure, c_char, c_double, c_int, c_uint, c_ushort
 from io import BufferedIOBase, RawIOBase
 from typing import Sequence
 
+from composable_mapping import Affine, CoordinateSystem, ISampler, samplable_volume
 from torch import Tensor
 from torch import device as torch_device
 from torch import dtype as torch_dtype
 from torch import tensor
-
-from algorithm.composable_mapping.factory import ComposableFactory, CoordinateSystemFactory
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs
 
 AIR_CONFIG_MAX_PATH_LENGTH = 128
 
@@ -115,7 +113,7 @@ def transform_volume_by_air(
     volume: Tensor,
     target_voxel_size: tuple[float, float, float],
     target_shape: tuple[int, int, int],
-    grid_mapping_args: GridMappingArgs,
+    sampler: ISampler,
 ) -> Tensor:
     """Transform volume by air transform
 
@@ -124,33 +122,41 @@ def transform_volume_by_air(
         volume: Tensor with shape ([batch_size, ]n_channels, dim_1, dim_2, dim_3)
         target_voxel_size: Voxel size of the target space where the volume will be transformed
         target_shape: Target volume shape
-        grid_mapping_args: Defines how to interpolate
+        sampler: Defines how to interpolate
 
     Assumes that the shape of the volume and source space of the air tranformation match.
     """
-    source_coordinate_system = CoordinateSystemFactory.voxel(
-        get_source_shape(air), voxel_size=get_source_voxel_size(air), dtype=volume.dtype
+    source_coordinate_system = CoordinateSystem.voxel(
+        get_source_shape(air),
+        voxel_size=get_source_voxel_size(air),
+        dtype=volume.dtype,
+        device=volume.device,
     )
-    transformation_target_coordinate_system = CoordinateSystemFactory.voxel(
-        get_transformed_shape(air), voxel_size=get_transformed_voxel_size(air), dtype=volume.dtype
+    transformation_target_coordinate_system = CoordinateSystem.voxel(
+        get_transformed_shape(air),
+        voxel_size=get_transformed_voxel_size(air),
+        dtype=volume.dtype,
+        device=volume.device,
     )
-    target_coordinate_system = CoordinateSystemFactory.voxel(
-        target_shape, voxel_size=target_voxel_size, dtype=volume.dtype
+    target_coordinate_system = CoordinateSystem.voxel(
+        target_shape, voxel_size=target_voxel_size, dtype=volume.dtype, device=volume.device
     )
-    volume_mapping = ComposableFactory.create_volume(
+    volume_mapping = samplable_volume(
         volume,
         coordinate_system=source_coordinate_system,
-        grid_mapping_args=grid_mapping_args,
+        sampler=sampler,
     )
-    voxel_coordinate_transformation = ComposableFactory.create_affine(
+    voxel_coordinate_transformation = Affine.from_matrix(
         get_transformation_matrix(air, device=volume.device, dtype=volume.dtype)
     )
     return (
-        volume_mapping.compose(source_coordinate_system.from_voxel_coordinates)
-        .compose(voxel_coordinate_transformation)
-        .compose(transformation_target_coordinate_system.to_voxel_coordinates)(
-            target_coordinate_system.grid
+        (
+            volume_mapping
+            @ source_coordinate_system.from_voxel_coordinates
+            @ voxel_coordinate_transformation
+            @ transformation_target_coordinate_system.to_voxel_coordinates
         )
+        .sample_to(target_coordinate_system)
         .generate_values()
     )
 
@@ -159,7 +165,7 @@ def inverse_transform_volume_by_air(
     air: AIR16,
     volume: Tensor,
     target_voxel_size: Sequence[float],
-    grid_mapping_args: GridMappingArgs,
+    sampler: ISampler,
 ) -> Tensor:
     """Transform volume by air transform to the source space of the transform
 
@@ -167,31 +173,40 @@ def inverse_transform_volume_by_air(
         air: Air transform
         volume: Tensor with shape ([batch_size, ]n_channels, dim_1, dim_2, dim_3)
         target_voxel_size: Voxel size of the target space where the volume is located
-        grid_mapping_args: Defines how to interpolate
+        sampler: Defines how to interpolate
 
     Assumes that the shape of the volume and source space of the air tranformation match.
     """
-    source_coordinate_system = CoordinateSystemFactory.voxel(
-        get_source_shape(air), voxel_size=get_source_voxel_size(air), dtype=volume.dtype
+    source_coordinate_system = CoordinateSystem.voxel(
+        get_source_shape(air),
+        voxel_size=get_source_voxel_size(air),
+        dtype=volume.dtype,
+        device=volume.device,
     )
-    transformation_target_coordinate_system = CoordinateSystemFactory.voxel(
-        get_transformed_shape(air), voxel_size=get_transformed_voxel_size(air), dtype=volume.dtype
+    transformation_target_coordinate_system = CoordinateSystem.voxel(
+        get_transformed_shape(air),
+        voxel_size=get_transformed_voxel_size(air),
+        dtype=volume.dtype,
+        device=volume.device,
     )
-    target_coordinate_system = CoordinateSystemFactory.voxel(
-        volume.shape[-3:], voxel_size=target_voxel_size, dtype=volume.dtype
+    target_coordinate_system = CoordinateSystem.voxel(
+        volume.shape[-3:], voxel_size=target_voxel_size, dtype=volume.dtype, device=volume.device
     )
-    volume_mapping = ComposableFactory.create_volume(
+    volume_mapping = samplable_volume(
         volume,
         coordinate_system=target_coordinate_system,
-        grid_mapping_args=grid_mapping_args,
+        sampler=sampler,
     )
-    voxel_coordinate_transformation = ComposableFactory.create_affine(
+    voxel_coordinate_transformation = Affine.from_matrix(
         get_transformation_matrix(air, device=volume.device, dtype=volume.dtype)
     )
-    return volume_mapping.compose(
-        transformation_target_coordinate_system.from_voxel_coordinates
-    ).compose(
-        voxel_coordinate_transformation.invert()
-    ).compose(
-        source_coordinate_system.to_voxel_coordinates
-    )(source_coordinate_system.grid).generate_values()
+    return (
+        (
+            volume_mapping
+            @ transformation_target_coordinate_system.from_voxel_coordinates
+            @ voxel_coordinate_transformation.invert()
+            @ source_coordinate_system.to_voxel_coordinates
+        )
+        .sample_to(source_coordinate_system)
+        .generate_values()
+    )

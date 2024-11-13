@@ -1,17 +1,14 @@
 """Tests for SITReg model"""
 
-
 from unittest import TestCase
 
+from composable_mapping import GridComposableMapping
 from deformation_inversion_layer.fixed_point_iteration import AndersonSolver
 from torch import rand
-from torch.nn.functional import relu
 from torch.testing import assert_close
 
 from algorithm.affine_transformation import AffineTransformationTypeDefinition
-from algorithm.composable_mapping.grid_mapping import GridMappingArgs
-from algorithm.composable_mapping.interface import IComposableMapping
-from algorithm.interpolator import LinearInterpolator
+from model.activation import ReLUFactory
 from model.normalizer import GroupNormalizerFactory
 from model.sitreg import SITReg
 from model.sitreg.feature_extractor import EncoderFeatureExtractor
@@ -26,7 +23,7 @@ class SITRegTests(TestCase):
         image_2 = rand(16, 3, 64, 64)
         feature_extractor = EncoderFeatureExtractor(
             n_input_channels=3,
-            activation=relu,
+            activation_factory=ReLUFactory(),
             n_features_per_resolution=[8, 16, 32],
             n_convolutions_per_resolution=[2, 2, 2],
             input_shape=[64, 64],
@@ -41,26 +38,17 @@ class SITRegTests(TestCase):
             input_voxel_size=(1.0, 2.0),
             input_shape=(64, 64),
             transformation_downsampling_factor=(1.0, 1.0),
-            transformation_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(padding_mode="border"),
-                mask_outside_fov=False,
-            ),
-            volume_mapping_args=GridMappingArgs(
-                interpolator=LinearInterpolator(padding_mode="border"),
-                mask_outside_fov=False,
-            ),
             forward_fixed_point_solver=AndersonSolver(),
             backward_fixed_point_solver=AndersonSolver(),
-            activation=relu,
+            activation_factory=ReLUFactory(),
+            normalizer_factory=GroupNormalizerFactory(2),
         )
         image_coordinate_system = symmetric_network.image_coordinate_system
-        forward_mapping: IComposableMapping
-        inverse_mapping: IComposableMapping
-        reverse_forward_mapping: IComposableMapping
-        reverse_inverse_mapping: IComposableMapping
-        ((forward_mapping, inverse_mapping),) = symmetric_network(
-            image_1=image_1, image_2=image_2
-        )
+        forward_mapping: GridComposableMapping
+        inverse_mapping: GridComposableMapping
+        reverse_forward_mapping: GridComposableMapping
+        reverse_inverse_mapping: GridComposableMapping
+        ((forward_mapping, inverse_mapping),) = symmetric_network(image_1=image_1, image_2=image_2)
         ((reverse_forward_mapping, reverse_inverse_mapping),) = symmetric_network(
             image_1=image_2,
             image_2=image_1,

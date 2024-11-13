@@ -72,12 +72,6 @@ class CubicSplineUpsampling(Module):
             apply_prefiltering: Whether to apply prefiltering
             prefilter_inplace: Whether to perform the prefiltering step in-place
         """
-        if apply_prefiltering and self._upsampling_factor == 1:
-            return volume
-        if apply_prefiltering:
-            upsampled = cubic_spline_coefficients(volume, inplace=prefilter_inplace)
-        else:
-            upsampled = volume
         first_spatial_dim = min(volume.ndim - 1, 2)
         n_dims = volume.ndim - first_spatial_dim
         if isinstance(self._upsampling_factor, int):
@@ -86,6 +80,12 @@ class CubicSplineUpsampling(Module):
         else:
             upsampling_factors = self._upsampling_factor
             upsampling_kernels = list(self.upsampling_kernels)
+        if apply_prefiltering:
+            if upsampling_factors == n_dims * [1]:
+                return volume
+            upsampled = cubic_spline_coefficients(volume, inplace=prefilter_inplace)
+        else:
+            upsampled = volume
         for dim, upsampling_factor, upsampling_kernel in zip(
             range(first_spatial_dim, upsampled.ndim), upsampling_factors, upsampling_kernels
         ):

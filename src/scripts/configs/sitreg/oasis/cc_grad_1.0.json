@@ -2,6 +2,12 @@
     "data": {
         "module": "oasis",
         "config": {
+            "included_segmentation_class_indices": [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+                35
+            ],
             "batch_size": 1,
             "iterate_inference_pairs_in_both_directions": false,
             "downsampling_factor": [1, 1, 1],
@@ -9,7 +15,7 @@
             "normalize": false,
             "seed": 123456789,
             "file_type": "aligned_norm",
-            "evaluation_mask_file_type_seg35": "aligned_seg35",
+            "segmentation_file_type": "aligned_seg35",
             "training_pairs_per_epoch": 5000,
             "n_training_cases": null,
             "metrics": {
@@ -21,7 +27,8 @@
         }
     },
     "application": {
-        "module": "sitreg",
+        "training_factory": "application.sitreg.interface.create_training_definition",
+        "inference_factory": "application.sitreg.interface.create_inference_definition",
         "config": {
             "inference": {
         		"save_intermediate_mappings_for_levels": null,
@@ -62,6 +69,9 @@
                     "args": {
                         "n_groups": 2
                     }
+                },
+                "activation": {
+                    "type": "ReLUFactory"
                 },
                 "n_input_channels": 1,
                 "voxel_size": [1.0, 1.0, 1.0],

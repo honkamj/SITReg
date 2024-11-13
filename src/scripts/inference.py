@@ -1,6 +1,5 @@
 """Inference script"""
 
-
 from argparse import ArgumentParser
 from logging import getLogger
 from multiprocessing import Queue, get_context
@@ -8,7 +7,7 @@ from os import makedirs, remove
 from os.path import isfile, join
 from random import shuffle
 from threading import Thread
-from typing import Any, Iterable, Mapping, NamedTuple, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional, Sequence
 
 from torch import device as torch_device
 from torch import no_grad, set_default_dtype
@@ -16,8 +15,16 @@ from torch.multiprocessing import spawn
 from tqdm import tqdm  # type: ignore
 
 from application.interface import IInferenceDefinition, create_inference_definition
-from data.interface import IInferenceFactory, InferenceDataArgs, create_inference_data_factory
-from data.storage import load_items_from_storages, save_items_to_storages, storages_exist
+from data.interface import (
+    IInferenceFactory,
+    InferenceDataArgs,
+    create_inference_data_factory,
+)
+from data.storage import (
+    load_items_from_storages,
+    save_items_to_storages,
+    storages_exist,
+)
 from scripts.file_names import (
     case_metrics_file_name,
     find_largest_epoch,
@@ -71,6 +78,7 @@ def _inference_for_index(
     inference_data_factory: IInferenceFactory,
     inference_definition: IInferenceDefinition,
     args: _InferenceArgs,
+    load_model_state_if_not_loaded: Callable[[], None] | None,
 ) -> Mapping[str, Any]:
     metadata = inference_data_factory.get_metadata(case_index)
     logger.info(
@@ -105,6 +113,8 @@ def _inference_for_index(
         )
     )
     if do_inference:
+        if load_model_state_if_not_loaded is not None:
+            load_model_state_if_not_loaded()
         case_data_iterable: Iterable[Any] = inference_data_factory.get_data_loader(
             case_index, num_workers=args.num_workers
         )
@@ -158,6 +168,31 @@ def _inference_for_index(
     return case_metrics
 
 
+class _LoadModelIfNotLoaded:
+    def __init__(
+        self,
+        inference_definition: IInferenceDefinition,
+        epoch: int,
+        target_dir: str,
+        device: torch_device,
+    ):
+        self._inference_definition = inference_definition
+        self._epoch = epoch
+        self._target_dir = target_dir
+        self._device = device
+        self._is_loaded = False
+
+    def __call__(self):
+        if not self._is_loaded:
+            _load_states(
+                inference_definition=self._inference_definition,
+                epoch=self._epoch,
+                target_dir=self._target_dir,
+                device=self._device,
+            )
+            self._is_loaded = True
+
+
 def _inference_process(
     inference_process_rank: int,
     inference_data_factory: IInferenceFactory,
@@ -173,7 +208,15 @@ def _inference_process(
     device = args.devices[inference_process_rank]
     inference_definition = create_inference_definition(args.config, device)
     if args.epoch is not None:
-        _load_states(inference_definition, args.epoch, args.target_dir, device)
+        load_model_state_if_not_loaded: _LoadModelIfNotLoaded | None = _LoadModelIfNotLoaded(
+            inference_definition=inference_definition,
+            epoch=args.epoch,
+            target_dir=args.target_dir,
+            device=device,
+        )
+    else:
+        load_model_state_if_not_loaded = None
+
     if args.num_dummy_inferences > 0:
         logger.info("Allocating memory")
         dummy_batch, dummy_metadata = inference_data_factory.generate_dummy_batch_and_metadata()
@@ -192,6 +235,7 @@ def _inference_process(
                 inference_data_factory=inference_data_factory,
                 inference_definition=inference_definition,
                 args=args,
+                load_model_state_if_not_loaded=load_model_state_if_not_loaded,
             )
         )
 
@@ -211,7 +255,7 @@ def _inference(args: _InferenceArgs) -> None:
     )
     n_cases = len(inference_data_factory)
     case_indices = list(range(n_cases))
-    case_indices = case_indices[args.instance_index::args.n_instances]
+    case_indices = case_indices[args.instance_index :: args.n_instances]
     if args.shuffle_cases:
         shuffle(case_indices)
     evaluation_listening_args = (
@@ -346,9 +390,7 @@ def _main() -> None:
     parser.add_argument(
         "--do-not-save-outputs", help="Do not save outputs to disk", action="store_true"
     )
-    parser.add_argument(
-        "--shuffle-cases", help="Shuffle cases", action="store_true"
-    )
+    parser.add_argument("--shuffle-cases", help="Shuffle cases", action="store_true")
     parser.add_argument(
         "--evaluate", help="Perform evaluation of inference outputs", action="store_true"
     )
@@ -413,13 +455,23 @@ def _main() -> None:
     if args.epoch is None:
         epoch_candidate = find_largest_epoch(target_dir, require_optimizer=False)
         epochs: list[int | None] = [epoch_candidate]
-    elif len(args.epoch) == 1 and args.epoch[0] == "best_epoch":
-        with open(join(target_dir, "best_epoch.txt"), mode="r", encoding="UTF-8") as epoch_file:
-            epochs = [int(epoch_file.read().strip()) - 1]
     else:
-        epochs = [int(entered_epoch) - 1 for entered_epoch in args.epoch]
+        epochs = []
+        for entered_epoch in args.epoch:
+            if entered_epoch == "best_epoch":
+                with open(
+                    join(target_dir, args.inference_folder, "best_epoch.txt"),
+                    mode="r",
+                    encoding="UTF-8",
+                ) as epoch_file:
+                    epochs.append(int(epoch_file.read().strip()) - 1)
+            elif len(entered_epoch.split("-")) == 2:
+                start_epoch_str, end_epoch_str = entered_epoch.split("-")
+                epochs.extend(range(int(start_epoch_str) - 1, int(end_epoch_str)))
+            else:
+                epochs.append(int(entered_epoch) - 1)
     devices = [torch_device(device_name) for device_name in args.devices]
-    log_path = join(target_dir, "inference_log.out")
+    log_path = join(target_dir, f"{args.inference_folder}_log.out")
     configure_logging(log_path)
     print(f'Log written to "{log_path}"')
     for epoch in epochs:

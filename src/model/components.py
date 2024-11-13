@@ -2,58 +2,92 @@
 
 from abc import abstractmethod
 from types import EllipsisType
-from typing import Callable, Optional, Sequence, Union
+from typing import Sequence, Union
 
 from torch import Tensor, cat
 from torch.nn import Module, ModuleList
 
-from model.interface import INormalizerFactory
-from model.normalizer import EmptyNormalizerFactory
+from model.activation import get_activation_factory
+from model.interface import IActivationFactory, INormalizerFactory
+from model.normalizer import get_normalizer_factory
 from util.ndimensional_operators import avg_pool_nd, conv_nd, conv_transpose_nd
 
 
-class ConvolutionBlockNd(Module):
-    """Double convolution"""
+class ConvNd(Module):
+    """Single convolution"""
 
     def __init__(
         self,
-        n_dims: int,
+        n_input_channels: int,
+        n_output_channels: int,
+        kernel_size: Sequence[int],
+        padding: int,
+        bias: bool = True,
+        stride: Sequence[int] | int = 1,
+    ) -> None:
+        super().__init__()
+        self.conv = conv_nd(len(kernel_size))(
+            n_input_channels,
+            n_output_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            bias=bias,
+            stride=stride,
+        )
+
+    def forward(self, input_tensor: Tensor) -> Tensor:
+        """Double convolve 2D input
+
+        Args:
+            input_tensor: Tensor with shape (batch_size, n_input_channels, *spatial_shape)
+
+        Returns:
+            Tensor with shape (batch_size, n_output_channels, *output_spatial_shape)
+        """
+        return self.conv(input_tensor)
+
+
+class ConvBlockNd(Module):
+    """Multiple convolutions"""
+
+    def __init__(
+        self,
         n_convolutions: int,
         n_input_channels: int,
         n_output_channels: int,
-        activation: Callable[[Tensor], Tensor],
-        normalizer_factory: Optional[INormalizerFactory] = None,
+        kernel_size: Sequence[int],
+        padding: int,
+        activation_factory: IActivationFactory | None = None,
+        normalizer_factory: INormalizerFactory | None = None,
     ) -> None:
         super().__init__()
-        normalizer_factory = (
-            EmptyNormalizerFactory() if normalizer_factory is None else normalizer_factory
-        )
-        self.activation = activation
+        normalizer_factory = get_normalizer_factory(normalizer_factory)
+        activation_factory = get_activation_factory(activation_factory)
         self.convolutions = ModuleList()
         self.convolutions.append(
-            conv_nd(n_dims)(
-                in_channels=n_input_channels,
-                out_channels=n_output_channels,
-                kernel_size=3,
-                padding=1,
+            ConvNd(
+                n_input_channels,
+                n_output_channels,
+                kernel_size=kernel_size,
+                padding=padding,
+                bias=True,
             )
         )
         for _ in range(1, n_convolutions):
             self.convolutions.append(
-                conv_nd(n_dims)(
-                    in_channels=n_output_channels,
-                    out_channels=n_output_channels,
-                    kernel_size=3,
-                    padding=1,
+                ConvNd(
+                    n_output_channels,
+                    n_output_channels,
+                    kernel_size=kernel_size,
+                    padding=padding,
+                    bias=True,
                 )
             )
-        self.normalizer_modules = ModuleList()
-        self._normalizers = []
+        self.normalizers = ModuleList()
+        self.activations = ModuleList()
         for _ in range(n_convolutions):
-            normalizer = normalizer_factory.build(n_output_channels)
-            if isinstance(normalizer, Module):
-                self.normalizer_modules.append(normalizer)
-            self._normalizers.append(normalizer)
+            self.normalizers.append(normalizer_factory.build(n_output_channels))
+            self.activations.append(activation_factory.build())
 
     def forward(self, input_tensor: Tensor) -> Tensor:
         """Double convolve 2D input
@@ -65,10 +99,12 @@ class ConvolutionBlockNd(Module):
             Tensor with shape (batch_size, n_output_channels, width, height)
         """
         output = input_tensor
-        for convolution, normalizer in zip(self.convolutions, self._normalizers):
+        for convolution, activation, normalizer in zip(
+            self.convolutions, self.activations, self.normalizers
+        ):
             output = convolution(output)
-            output = self.activation(output)
             output = normalizer(output)
+            output = activation(output)
         return output
 
 
@@ -77,36 +113,36 @@ class _BaseDownsamplingBlockNd(Module):
 
     def __init__(
         self,
-        n_dims: int,
         n_convolutions: int,
         n_input_channels: int,
         n_output_channels: int,
-        activation: Callable[[Tensor], Tensor],
-        normalizer_factory: Optional[INormalizerFactory] = None,
-        downsampling_factor: Optional[Sequence[int]] = None,
+        kernel_size: Sequence[int],
+        activation_factory: IActivationFactory | None = None,
+        normalizer_factory: INormalizerFactory | None = None,
+        downsampling_factor: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
+        n_dims = len(kernel_size)
         if downsampling_factor is None:
             downsampling_factor = [2] * n_dims
-        normalizer_factory = (
-            EmptyNormalizerFactory() if normalizer_factory is None else normalizer_factory
-        )
         self.downsampling = self._get_downsampling_layer(
-            n_dims, n_input_channels, n_output_channels, downsampling_factor
+            n_input_channels=n_input_channels,
+            n_output_channels=n_output_channels,
+            downsampling_factor=downsampling_factor,
         )
-        self.double_conv = ConvolutionBlockNd(
-            n_dims=n_dims,
+        self.conv = ConvBlockNd(
             n_convolutions=n_convolutions,
             n_input_channels=n_output_channels,
             n_output_channels=n_output_channels,
-            activation=activation,
+            kernel_size=kernel_size,
+            padding=1,
+            activation_factory=activation_factory,
             normalizer_factory=normalizer_factory,
         )
 
     @abstractmethod
     def _get_downsampling_layer(
         self,
-        n_dims: int,
         n_input_channels: int,
         n_output_channels: int,
         downsampling_factor: Sequence[int],
@@ -123,7 +159,7 @@ class _BaseDownsamplingBlockNd(Module):
             Tensor with shape (batch_size, n_output_channels, width // 2, height // 2)
         """
         output = self.downsampling(input_tensor)
-        output = self.double_conv(output)
+        output = self.conv(output)
         return output
 
 
@@ -132,15 +168,16 @@ class ConvDownsamplingBlockNd(_BaseDownsamplingBlockNd):
 
     def _get_downsampling_layer(
         self,
-        n_dims: int,
         n_input_channels: int,
         n_output_channels: int,
         downsampling_factor: Sequence[int],
     ) -> Module:
-        return conv_nd(n_dims)(
-            in_channels=n_input_channels,
-            out_channels=n_output_channels,
+        return ConvNd(
+            n_input_channels=n_input_channels,
+            n_output_channels=n_output_channels,
             kernel_size=downsampling_factor,
+            padding=0,
+            bias=True,
             stride=downsampling_factor,
         )
 
@@ -150,40 +187,44 @@ class _BaseDownsamplingBlockWithSkipNd(Module):
 
     def __init__(
         self,
-        n_dims: int,
         n_convolutions: int,
         n_input_channels: int,
         n_output_channels: int,
-        activation: Callable[[Tensor], Tensor],
-        normalizer_factory: Optional[INormalizerFactory] = None,
-        downsampling_factor: Optional[Sequence[int]] = None,
+        kernel_size: Sequence[int],
+        activation_factory: IActivationFactory | None = None,
+        normalizer_factory: INormalizerFactory | None = None,
+        downsampling_factor: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
+        n_dims = len(kernel_size)
         if downsampling_factor is None:
             downsampling_factor = [2] * n_dims
-        normalizer_factory = (
-            EmptyNormalizerFactory() if normalizer_factory is None else normalizer_factory
-        )
         self.downsampling = self._get_downsampling_layer(
-            n_dims, n_input_channels, n_output_channels, downsampling_factor
+            n_input_channels=n_input_channels,
+            n_output_channels=n_output_channels,
+            downsampling_factor=downsampling_factor,
         )
-        self.double_conv = ConvolutionBlockNd(
-            n_dims=n_dims,
+        self.conv = ConvBlockNd(
             n_convolutions=n_convolutions,
             n_input_channels=n_output_channels,
             n_output_channels=n_output_channels,
-            activation=activation,
+            kernel_size=kernel_size,
+            padding=1,
+            activation_factory=activation_factory,
             normalizer_factory=normalizer_factory,
         )
-        self.average_pool = avg_pool_nd(n_dims)(kernel_size=2)
-        self.projection = conv_nd(n_dims)(
-            in_channels=n_input_channels, out_channels=n_output_channels, kernel_size=1, padding=0
+        self.average_pool = avg_pool_nd(n_dims)(kernel_size=downsampling_factor)
+        self.projection = ConvNd(
+            n_input_channels=n_input_channels,
+            n_output_channels=n_output_channels,
+            kernel_size=(1,) * n_dims,
+            padding=0,
+            bias=True,
         )
 
     @abstractmethod
     def _get_downsampling_layer(
         self,
-        n_dims: int,
         n_input_channels: int,
         n_output_channels: int,
         downsampling_factor: Sequence[int],
@@ -202,7 +243,7 @@ class _BaseDownsamplingBlockWithSkipNd(Module):
         main = self.downsampling(input_tensor)
         main = self.projection(self.average_pool(skip)) + main
         next_skip = main
-        main = self.double_conv(main)
+        main = self.conv(main)
         return main, next_skip
 
 
@@ -211,15 +252,16 @@ class ConvDownsamplingBlockWithSkipNd(_BaseDownsamplingBlockWithSkipNd):
 
     def _get_downsampling_layer(
         self,
-        n_dims: int,
         n_input_channels: int,
         n_output_channels: int,
         downsampling_factor: Sequence[int],
     ) -> Module:
-        return conv_nd(n_dims)(
-            in_channels=n_input_channels,
-            out_channels=n_output_channels,
+        return ConvNd(
+            n_input_channels=n_input_channels,
+            n_output_channels=n_output_channels,
             kernel_size=downsampling_factor,
+            padding=0,
+            bias=True,
             stride=downsampling_factor,
         )
 
@@ -235,15 +277,12 @@ class ConvTransposedUpsamplingBlockNd(Module):
         n_skip_channels: int,
         n_upsampled_channels: int,
         n_output_channels: int,
-        activation: Callable[[Tensor], Tensor],
         output_paddings: Sequence[int],
         cropping_slice: tuple[Union[EllipsisType, slice], ...],
-        normalizer_factory: Optional[INormalizerFactory] = None,
+        activation_factory: IActivationFactory | None = None,
+        normalizer_factory: INormalizerFactory | None = None,
     ) -> None:
         super().__init__()
-        normalizer_factory = (
-            EmptyNormalizerFactory() if normalizer_factory is None else normalizer_factory
-        )
         self.upsampling = conv_transpose_nd(n_dims)(
             in_channels=n_input_channels,
             out_channels=n_upsampled_channels,
@@ -251,12 +290,13 @@ class ConvTransposedUpsamplingBlockNd(Module):
             stride=2,
             output_padding=output_paddings,
         )
-        self.conv = ConvolutionBlockNd(
-            n_dims=n_dims,
+        self.conv = ConvBlockNd(
             n_convolutions=n_convolutions,
             n_input_channels=n_upsampled_channels + n_skip_channels,
             n_output_channels=n_output_channels,
-            activation=activation,
+            kernel_size=(3,) * n_dims,
+            padding=1,
+            activation_factory=activation_factory,
             normalizer_factory=normalizer_factory,
         )
         self._cropping_slice = cropping_slice

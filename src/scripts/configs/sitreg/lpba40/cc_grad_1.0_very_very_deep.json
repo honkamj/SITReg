@@ -2,6 +2,14 @@
     "data": {
         "module": "lpba40",
         "config": {
+            "included_segmentation_class_indices": [
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                31, 32, 33, 34, 41, 42, 43, 44, 45, 46,
+                47, 48, 49, 50, 61, 62, 63, 64, 65, 66,
+                67, 68, 81, 82, 83, 84, 85, 86, 87, 88,
+                89, 90, 91, 92, 101, 102, 121, 122, 161,
+                162, 163, 164, 165, 166, 181, 182
+            ],
             "batch_size": 1,
             "iterate_inference_pairs_in_both_directions": false,
             "downsampling_factor": [1, 1, 1],
@@ -10,7 +18,7 @@
             "shift_and_normalize": null,
             "seed": 123456789,
             "file_type": "delineation.brain.bfc",
-            "evaluation_mask_file_type": "delineation.structure.label",
+            "segmentation_file_type": "delineation.structure.label",
             "training_pairs_per_epoch": 5000,
             "n_training_cases": null,
             "metrics": {
@@ -22,7 +30,8 @@
         }
     },
     "application": {
-        "module": "sitreg",
+        "training_factory": "application.sitreg.interface.create_training_definition",
+        "inference_factory": "application.sitreg.interface.create_inference_definition",
         "config": {
             "inference": {
         		"save_intermediate_mappings_for_levels": null,
@@ -75,6 +84,9 @@
                     "args": {
                         "n_groups": 2
                     }
+                },
+                "activation": {
+                    "type": "ReLUFactory"
                 },
                 "n_input_channels": 1,
                 "voxel_size": [1.0, 1.0, 1.0],
