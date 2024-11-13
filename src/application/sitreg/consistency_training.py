@@ -1,7 +1,6 @@
 """SITReg registration training implementation"""
 
 from logging import getLogger
-from math import ceil
 from typing import Any, Mapping, Sequence, TypeVar
 
 from composable_mapping import (
@@ -12,17 +11,14 @@ from composable_mapping import (
     samplable_volume,
 )
 from numpy import interp
-from torch import Tensor, empty_like, inverse, linspace, ones, rand, randn
+from torch import Tensor, empty_like, inverse, ones
 from torch.distributed import (
     broadcast,
     get_group_rank,
     get_process_group_ranks,
     new_group,
 )
-from torch.distributions import Normal
-from torch.nn.functional import conv1d
 
-from algorithm.dense_deformation import integrate_svf
 from algorithm.multiply_gradient import multiply_backward
 from application.interface import TrainingDefinitionArgs
 from loss.interface import average_tensor_loss_dict
@@ -38,7 +34,7 @@ T = TypeVar("T")
 
 
 class SITRegDistributedConsistencyTraining(SITRegTraining):
-    """Distributed training for SITReg with population consistency loss"""
+    """Distributed training for SITReg with group consistency loss"""
 
     def __init__(
         self,

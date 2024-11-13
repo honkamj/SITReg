@@ -29,7 +29,6 @@ from model.sitreg import SITReg
 from model.sitreg.feature_extractor import EncoderFeatureExtractor
 from util.count_parameters import count_module_trainable_parameters
 from util.import_util import import_object
-from util.ndimensional_operators import conv_nd
 
 logger = getLogger(__name__)
 
