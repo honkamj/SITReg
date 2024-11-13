@@ -226,9 +226,15 @@ class SITReg(Module):
         batch_combined_features: Tensor,
     ) -> tuple[GridComposableMapping, GridComposableMapping]:
         if self._affine_extraction_network is None:
+            dtype = batch_combined_features.dtype
+            device = batch_combined_features.device
             return (
-                Identity().assign_coordinates(self._transformation_coordinate_system),
-                Identity().assign_coordinates(self._transformation_coordinate_system),
+                Identity(dtype=dtype, device=device).assign_coordinates(
+                    self._transformation_coordinate_system
+                ),
+                Identity(dtype=dtype, device=device).assign_coordinates(
+                    self._transformation_coordinate_system
+                ),
             )
         logger.debug("Starting affine transformation extraction")
         features_1, features_2 = chunk(batch_combined_features, 2)
