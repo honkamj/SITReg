@@ -846,6 +846,8 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
         return {
             "forward_displacement_field",
             "inverse_displacement_field",
+            "forward_mapping",
+            "inverse_mapping",
         } | super().evaluation_inference_outputs
 
 

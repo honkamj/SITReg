@@ -140,6 +140,8 @@ class BaseRegistrationCaseInferenceDefinition(BaseCaseInferenceDefinition):
                 image_1=image_2,
                 image_2=image_1,
             )
+            self._images_1.append(image_1[0])
+            self._images_2.append(image_2[0])
             self._resampled_images_1.append(resampled_image_1)
             self._resampled_images_2.append(resampled_image_2)
             self._forward_displacement_fields.append(forward_displacement_field)

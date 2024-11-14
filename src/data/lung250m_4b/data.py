@@ -7,7 +7,7 @@ from os.path import join
 from typing import Sequence
 
 from nibabel import load as nib_load  # type: ignore
-from torch import Tensor, from_numpy, get_default_dtype, load, ones
+from torch import Tensor, from_numpy, get_default_dtype, load
 
 from data.base import BaseDataDownloader, BaseVolumetricRegistrationData
 from data.interface import VolumetricDataArgs
@@ -148,8 +148,9 @@ class Lung250M4BData(BaseVolumetricRegistrationData):
     def _get_raw_mask_for_case(
         self, case_name: str, args: VolumetricDataArgs, registration_index: int
     ) -> Tensor:
-        shape = self._get_raw_shape_for_case(case_name, args, registration_index)
-        return ones(shape)[None]
+        mask = self._get_mask_spatial_image_for_case(case_name, registration_index).get_fdata()
+        mask = from_numpy(mask).to(get_default_dtype())
+        return mask[None]
 
     def _get_path_to_case(self, case_name: str, registration_index: int) -> str:
         case_folder = (

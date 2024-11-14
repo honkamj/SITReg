@@ -63,7 +63,7 @@ class Lung250M4BEvaluator(BaseVolumetricRegistrationEvaluator):
                 )
                 upsampler.to(ddf.device)
                 upsampled_ddf = (
-                    upsampler(ddf[None], apply_prefiltering=True, prefilter_inplace=True)[0]
+                    upsampler(ddf[None], apply_prefiltering=True, prefilter_inplace=False)[0]
                     * scaling_factor
                 )
                 updated_ddfs.append(upsampled_ddf)

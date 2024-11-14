@@ -28,23 +28,27 @@ For this section we assume that you have navigated to directory ''src'' and have
 
 If you run into problems with reproducing the results in the paper, do not hesitate to contact the authors.
 
-To train the model used in the paper with affinely aligned brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
+To train similar model used in the paper with affinely aligned brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
 
     python train.py --config scripts/configs/sitreg/oasis/cc_grad_1.0.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
-To train the model used in the paper with raw (not affinely aligned) brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
+To train similar model used in the paper with raw (not affinely aligned) brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
 
     python train.py --config scripts/configs/sitreg/oasis/cc_grad_1.0_raw_data.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
-To train the model used in the paper with LPBA40 dataset (https://resource.loni.usc.edu/resources/atlases-downloads/), run the following command:
+To train similar model used in the paper with LPBA40 dataset (https://resource.loni.usc.edu/resources/atlases-downloads/), run the following command:
 
     python train.py --config scripts/configs/sitreg/lpba40/cc_grad_1.0_very_very_deep.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
-To train the model used in the paper with Lung250M-4B dataset (https://github.com/multimodallearning/Lung250M-4B), run the following command:
+To train similar model used in the paper with Lung250M-4B dataset (https://github.com/multimodallearning/Lung250M-4B), run the following command:
 
     python train.py --config scripts/configs/sitreg/lung250m_4b/cc_grad_1.0_very_deep_half_res.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
+Note that the Lung250M-4B config is not identical to the one used in the paper, as it includes masking out invalid regions for similarity loss, which improves the results. The feature was disabled in the experiments since other methods did not have such property, and we wanted to compare architectures, not loss functions. One can replicate the results in the paper by setting "ignore_mask" to "True" in the config.
+
 The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
+
+For all the methods we chose the best epoch based on metrics computed on validation set (see [Evaluation](#evaluation)). The training is somewhat heavy but converges very fast, and some configs might have unneccesarily large number of epochs. E.g. Lung250M-4B training converges already during the first epoch (5000 training pairs) and no improvement is seen after that.
 
 ### Training for Learn2reg 2024 challenge submission
 
@@ -52,7 +56,7 @@ To train similar model to our submission to Learn2reg 2024 LUMIR task, first run
 
     torchrun --standalone --nnodes=1 --nproc-per-node=4 train.py --config scripts/configs/sitreg/lumir/cc_grad_1.0_very_deep_heavy.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0 --devices cuda:1 --devices cuda:2 --devices cuda:3
 
-After the first training has finnished, run the following fine-tuning training with group consistency loss and NDV loss (use the same values for TRAINING_ROOT_PATH, DATA_ROOT_PATH, and MODEL_NAME):
+After the first training has finnished, run the following fine-tuning training with group consistency loss and NDV loss (use the same values for TRAINING_ROOT_PATH, DATA_ROOT_PATH, and MODEL_NAME as it will continue the previous training):
 
     torchrun --standalone --nnodes=1 --nproc-per-node=3 train.py --config scripts/configs/sitreg/lumir/cc_grad_1.0_very_deep_heavy_group_consistency_ndv.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0 --devices cuda:1 --devices cuda:2
 

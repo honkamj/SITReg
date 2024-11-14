@@ -15,9 +15,9 @@
             "training_pairs_per_epoch": 2000,
             "n_training_cases": null,
             "metrics": {
-		    	"validate": ["dice", "sampled_determinant", "inverse_consistency"],
-                "sanity_check": ["dice", "sampled_determinant", "inverse_consistency"],
-		    	"test": ["dice", "hd95", "sampled_determinant", "inverse_consistency"]
+		    	"validate": ["sampled_determinant", "inverse_consistency"],
+                "sanity_check": ["dice", "hd95", "sampled_determinant", "inverse_consistency"],
+		    	"test": ["sampled_determinant", "inverse_consistency"]
 		    },
             "n_jacobian_samples_in_evaluation": 1000000,
             "jacobian_sampling_base_seed": 8524561973,

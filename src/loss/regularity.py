@@ -55,7 +55,7 @@ class _BaseGradientLoss(IRegularityLoss):
             coordinate mappings but instead mappings into displacements or flows.
     """
 
-    def __init__(self, regularize_flow: bool, _use_paper_averaging_method: bool = False) -> None:
+    def __init__(self, regularize_flow: bool) -> None:
         self._regularize_flow = regularize_flow
         self._default_params = build_default_params(
             none_ignored_params={"weight": 1.0},

@@ -4,7 +4,7 @@ from typing import Mapping
 
 from torch import Tensor, cat, stack, tensor
 from torch.linalg import det
-from torch.nn.functional import conv3d, pad
+from torch.nn.functional import conv3d
 
 from algorithm.dense_deformation import generate_voxel_coordinate_grid
 from util.optional import optional_add
@@ -78,6 +78,7 @@ def calculate_jacobian_determinants(ddf: Tensor) -> Mapping[str, Tensor]:
         "*yz": cat([kernels[key] for key in ["1*yz", "2*yz"]] * 3, dim=0),
     }
 
+    # a bug - pylint: disable=not-callable
     partials = {
         "x": conv3d(trans, weights["x"], groups=3)[:, :, :, 1:-1, 1:-1],
         "y": conv3d(trans, weights["y"], groups=3)[:, :, 1:-1, :, 1:-1],
@@ -224,30 +225,3 @@ def calculate_non_diffeomorphic_volume_map(
     assert non_diff_volume_map is not None
 
     return non_diff_volume_map
-
-
-def calculate_squared_non_diffeomorphic_volume(
-    jacobian_determinants: Mapping[str, Tensor], mask: Tensor | None = None, threshold=0.0
-) -> Tensor:
-    """Calculates the non-diffeomorphic volume map using the given jacobian determinants
-
-    Modified from https://github.com/yihao6/digital_diffeomorphism
-
-    Liu, Yihao, et al. "On finite difference jacobian computation in deformable image registration."
-    International Journal of Computer Vision (2024): 1-11.
-    """
-    if mask is not None:
-        mask = mask[:, 1:-1, 1:-1, 1:-1]
-    squared_volume: Tensor | None = None
-    for diff_direction in ["+++", "++-", "+-+", "+--", "j1*", "j2*", "-++", "-+-", "--+", "---"]:
-        volume_map = -0.5 * jacobian_determinants[diff_direction].clamp(min=None, max=threshold) / 6
-        if mask is not None:
-            volume_map = volume_map * mask
-        squared_volume = optional_add(
-            squared_volume,
-            volume_map.square().sum(),
-        )
-
-    assert squared_volume is not None
-
-    return squared_volume
