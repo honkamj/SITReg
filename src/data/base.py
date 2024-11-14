@@ -136,7 +136,7 @@ class BaseDataDownloader(IDataDownloader):
             try:
                 self._download_and_process(data_folder)
             except HTTPError:
-                logger.error("Downloading the data failed")
+                logger.error("Downloading the data failed.")
                 raise
             self._write_timestamp(data_folder)
         return data_folder
@@ -152,7 +152,11 @@ class BaseDataDownloader(IDataDownloader):
     def _ensure_target_folder_empty(data_folder: str) -> None:
         if isdir(data_folder):
             if len(listdir(data_folder)) != 0:
-                raise RuntimeError(f"Target directory {data_folder} is not empty.")
+                raise RuntimeError(
+                    f"Target directory {data_folder} is not empty. "
+                    "If you have already downloaded the data manually, "
+                    'add "timestamp.txt" file manually into the directory.'
+                )
 
     @staticmethod
     def _create_data_folder(data_folder: str) -> None:

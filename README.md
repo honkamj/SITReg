@@ -46,7 +46,7 @@ To train similar model used in the paper with Lung250M-4B dataset (https://githu
 
 Note that the Lung250M-4B config is not identical to the one used in the paper, as it includes masking out invalid regions for similarity loss, which improves the results. The feature was disabled in the experiments since other methods did not have such property, and we wanted to compare architectures, not loss functions. One can replicate the results in the paper by setting "ignore_mask" to "True" in the config.
 
-The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
+The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices (in those cases, just run the command with single "--devices cpu" flag for data downloading first), or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
 
 For all the methods we chose the best epoch based on metrics computed on validation set (see [Evaluation](#evaluation)). The training is somewhat heavy but converges very fast, and some configs might have unneccesarily large number of epochs. E.g. Lung250M-4B training converges already during the first epoch (5000 training pairs) and no improvement is seen after that.
 
