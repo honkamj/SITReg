@@ -87,7 +87,7 @@ class _BaseGradientLoss(IRegularityLoss):
                     ]
                 ),
                 limit_direction=LimitDirection.left(),
-                sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+                sampler=LinearInterpolator(mask_extrapolated_regions=False),
             ).generate_values()
             if not self._regularize_flow:
                 constant_dim_substraction = zeros(

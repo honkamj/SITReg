@@ -311,7 +311,7 @@ class SITReg(Module):
             "mappings_for_levels"
         """
         with default_sampler(
-            LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False)
+            LinearInterpolator(mask_extrapolated_regions=False)
         ):
             mappings_for_levels_set = set(mappings_for_levels)
             batch_combined_features_list: list[Tensor] = self._feature_extractor(
@@ -628,7 +628,7 @@ class _DenseExtractionNetwork(_BaseTransformationExtractionNetwork):
             coordinate_system=self._feature_coordinate_system,
             data_format=DataFormat.voxel_displacements(),
             sampler=CubicSplineSampler(
-                prefilter=False, mask_extrapolated_regions_for_empty_volume_mask=False
+                prefilter=False, mask_extrapolated_regions=False
             ),
         ).resample_to(self._transformation_coordinate_system)
 

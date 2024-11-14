@@ -141,7 +141,7 @@ class Lung250M4BEvaluator(BaseVolumetricRegistrationEvaluator):
             displacement_field,
             coordinate_system=coordinate_system,
             data_format=DataFormat.voxel_displacements(),
-            sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+            sampler=LinearInterpolator(mask_extrapolated_regions=False),
         )
         transformed_target_landmarks = displacement_field_mapping(
             mappable(target_landmarks[None])

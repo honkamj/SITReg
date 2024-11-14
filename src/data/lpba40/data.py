@@ -200,7 +200,7 @@ class LPBA40DataDownloader(BaseDataDownloader):
             air=air,
             volume=image_tensor,
             target_voxel_size=voxel_size,
-            sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+            sampler=LinearInterpolator(mask_extrapolated_regions=False),
         )
         nifti_image = Nifti1Image(
             transformed_image.numpy()[0],

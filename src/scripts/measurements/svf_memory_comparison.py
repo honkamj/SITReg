@@ -145,13 +145,13 @@ def _fixed_point_composition(displacement_field_1: Tensor, displacement_field_2:
         displacement_field_1,
         coordinate_system=coordinate_system,
         data_format=DataFormat.voxel_displacements(),
-        sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+        sampler=LinearInterpolator(mask_extrapolated_regions=False),
     )
     inverse_mapping = samplable_volume(
         inverse_displacement_field,
         coordinate_system=coordinate_system,
         data_format=DataFormat.voxel_displacements(),
-        sampler=LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False),
+        sampler=LinearInterpolator(mask_extrapolated_regions=False),
     )
     return (mapping @ inverse_mapping).sample().generate_values()
 

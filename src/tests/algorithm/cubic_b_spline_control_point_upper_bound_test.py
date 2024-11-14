@@ -32,7 +32,7 @@ class CubicSplineCoefficientsTests(TestCase):
 
     def _compute_true_2d_upper_bound(self, upsampling_factors: Sequence[int]) -> float:
         max_lipschitz_constant = 0.0
-        sampler = LinearInterpolator(mask_extrapolated_regions_for_empty_volume_mask=False)
+        sampler = LinearInterpolator(mask_extrapolated_regions=False)
         cache = EnumeratedSamplingParameterCache()
         for flattened_volume in tqdm(list(product((-1, 1), repeat=16))):
             with cache:
