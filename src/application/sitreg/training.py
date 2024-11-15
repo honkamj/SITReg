@@ -246,8 +246,8 @@ class SITRegTraining(BaseTrainingDefinition):
         )
 
 
-class SITRegSemiSupervisedTraining(SITRegTraining):
-    """Training for SITReg with segmentation maps"""
+class SITRegSegmentationTraining(SITRegTraining):
+    """Training for SITReg with additional segmentation supervision"""
 
     def __init__(
         self,

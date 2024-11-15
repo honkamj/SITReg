@@ -22,7 +22,7 @@ from application.sitreg.inference import (
     SITRegInference,
 )
 from application.sitreg.training import (
-    SITRegSemiSupervisedTraining,
+    SITRegSegmentationTraining,
     SITRegTraining,
 )
 from model.sitreg import SITReg
@@ -131,12 +131,12 @@ def create_distributed_consistency_training_definition(
     )
 
 
-def create_semi_supervised_training_definition(
+def create_segmentation_training_definition(
     application_config: Mapping[str, Any], args: TrainingDefinitionArgs
 ) -> ITrainingDefinition:
     """Create training definition based on config"""
     model = create_model(application_config["model"], device=args.devices[0])
-    return SITRegSemiSupervisedTraining(
+    return SITRegSegmentationTraining(
         model=model,
         application_config=application_config,
         args=args,

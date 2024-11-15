@@ -27,7 +27,7 @@ class MeanSquaredError(ISimilarityLoss):
     ) -> Tensor:
         params = handle_params(params, {"weight": 1.0})
         image_1_values = image_1.generate_values()
-        image_2_values = image_1.generate_values()
+        image_2_values = image_2.generate_values()
         return (
             params["weight"]
             * (
