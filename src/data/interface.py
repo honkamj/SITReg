@@ -135,6 +135,12 @@ class IVolumetricRegistrationData(ABC):
         """Get segmentation for the given case"""
 
     @abstractmethod
+    def get_case_landmarks(
+        self, case_name: str, args: VolumetricDataArgs, registration_index: int
+    ) -> Tensor:
+        """Get landmarks for the given case"""
+
+    @abstractmethod
     def get_case_mask(
         self,
         case_name: str,

@@ -2,20 +2,22 @@
 
 from itertools import chain, islice
 from logging import getLogger
-from typing import Any, Mapping, Sequence, TypeVar, cast
+from typing import Any, Mapping, Optional, Sequence, TypeVar, cast
 
 from composable_mapping import (
-    DataFormat,
+    ComposableMapping,
+    CoordinateSystem,
     EnumeratedSamplingParameterCache,
     GridComposableMapping,
+    ISampler,
     LinearInterpolator,
+    mappable,
     samplable_volume,
 )
-from torch import Tensor, cat, no_grad, ones_like
+from torch import Tensor, ones_like
 from torch.nn import Module
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Adam, Optimizer
-from torch.optim.lr_scheduler import ExponentialLR, LRScheduler
 
 from application.base import BaseTrainingDefinition
 from application.interface import TrainingDefinitionArgs
@@ -26,6 +28,7 @@ from loss.interface import (
     create_similarity_loss,
     get_combined_loss,
 )
+from loss.similarity import MeanSquaredError
 from model.sitreg import SITReg
 from model.sitreg.model import MappingPair
 from util.checked_type_casting import to_two_tuple
@@ -119,19 +122,26 @@ class SITRegTraining(BaseTrainingDefinition):
         self,
         batch: Any,
     ) -> tuple[Tensor, dict[str, float]]:
-        (image_1, mask_1), (image_2, mask_2) = batch
+        (image_1, mask_1, augmentation_1), (image_2, mask_2, augmentation_2) = batch
 
         image_1 = image_1.to(self._devices[0])
         mask_1 = self._handle_mask(mask_1.to(self._devices[0]))
         image_2 = image_2.to(self._devices[0])
         mask_2 = self._handle_mask(mask_2.to(self._devices[0]))
 
-        image_1_mapping = self._image_as_mapping(image_1, mask_1)
-        image_2_mapping = self._image_as_mapping(image_2, mask_2)
+        augmentation_1_mapping: ComposableMapping = augmentation_1.as_mapping().cast(
+            device=self._devices[0]
+        )
+        augmentation_2_mapping: ComposableMapping = augmentation_2.as_mapping().cast(
+            device=self._devices[0]
+        )
+
+        image_1_mapping = self._image_as_mapping(image_1, mask_1) @ augmentation_1_mapping
+        image_2_mapping = self._image_as_mapping(image_2, mask_2) @ augmentation_2_mapping
 
         regularity_deformations, similarity_deformations = self._obtain_deformations(
-            image_1=image_1,
-            image_2=image_2,
+            image_1=image_1_mapping.sample().generate_values(),
+            image_2=image_2_mapping.sample().generate_values(),
             mappings_for_levels_lists=(
                 [
                     (level_index, self._regularize_with_affine)
@@ -237,13 +247,118 @@ class SITRegTraining(BaseTrainingDefinition):
     def get_modules(self) -> Mapping[str, Module]:
         return {"registration_network": self._model}
 
-    def _image_as_mapping(self, image: Tensor, mask: Tensor) -> GridComposableMapping:
+    def _image_as_mapping(
+        self, image: Tensor, mask: Optional[Tensor] = None, sampler: ISampler = LinearInterpolator()
+    ) -> GridComposableMapping:
         return samplable_volume(
             image,
             mask=mask,
             coordinate_system=self._model.image_coordinate_system,
-            sampler=LinearInterpolator(),
+            sampler=sampler,
         )
+
+
+class SITRegLandmarkTraining(SITRegTraining):
+    """Training for SITReg with additional landmark supervision"""
+
+    def __init__(
+        self, model: SITReg, application_config: Mapping[str, Any], args: TrainingDefinitionArgs
+    ) -> None:
+        super().__init__(model, application_config, args)
+        self._landmark_coordinate_system = CoordinateSystem.voxel(
+            spatial_shape=application_config["model"]["input_shape"],
+            device=self._devices[0],
+        )
+        self._landmark_loss_weight = application_config["training"]["loss"]["landmark_weight"]
+        self._landmark_loss = MeanSquaredError()
+
+    def _compute_losses(
+        self,
+        batch: Any,
+    ) -> tuple[Tensor, dict[str, float]]:
+        (image_1, mask_1, augmentation_1, landmarks_1), (
+            image_2,
+            mask_2,
+            augmentation_2,
+            landmarks_2,
+        ) = batch
+
+        image_1 = image_1.to(self._devices[0])
+        mask_1 = self._handle_mask(mask_1.to(self._devices[0]))
+        landmarks_1 = landmarks_1.to(self._devices[0])
+        image_2 = image_2.to(self._devices[0])
+        mask_2 = self._handle_mask(mask_2.to(self._devices[0]))
+        landmarks_2 = landmarks_2.to(self._devices[0])
+
+        augmentation_1_mapping: ComposableMapping = augmentation_1.as_mapping().cast(
+            device=self._devices[0]
+        )
+        augmentation_2_mapping: ComposableMapping = augmentation_2.as_mapping().cast(
+            device=self._devices[0]
+        )
+
+        image_1_mapping = self._image_as_mapping(image_1, mask_1) @ augmentation_1_mapping
+        image_2_mapping = self._image_as_mapping(image_2, mask_2) @ augmentation_2_mapping
+
+        regularity_deformations, similarity_deformations, landmark_deformations = (
+            self._obtain_deformations(
+                image_1=image_1_mapping.sample().generate_values(),
+                image_2=image_2_mapping.sample().generate_values(),
+                mappings_for_levels_lists=(
+                    [
+                        (level_index, self._regularize_with_affine)
+                        for level_index in self._regularity_loss_levels
+                    ],
+                    [(level_index, True) for level_index in self._similarity_loss_levels],
+                    [(0, True)],
+                ),
+            )
+        )
+        landmark_deformation = landmark_deformations[0]
+
+        mappable_landmarks_1 = mappable(landmarks_1)
+        mappable_landmarks_2 = mappable(landmarks_2)
+        transformed_landmarks_1 = (
+            self._landmark_coordinate_system.from_voxel_coordinates
+            @ self._model.transformation_coordinate_system.to_voxel_coordinates
+            @ landmark_deformation.inverse_mapping
+            @ self._model.transformation_coordinate_system.from_voxel_coordinates
+            @ self._landmark_coordinate_system.to_voxel_coordinates
+        )(mappable_landmarks_1)
+        transformed_landmarks_2 = (
+            self._landmark_coordinate_system.from_voxel_coordinates
+            @ self._model.transformation_coordinate_system.to_voxel_coordinates
+            @ landmark_deformation.forward_mapping
+            @ self._model.transformation_coordinate_system.from_voxel_coordinates
+            @ self._landmark_coordinate_system.to_voxel_coordinates
+        )(mappable_landmarks_2)
+
+        landmark_loss = (
+            self._landmark_loss(transformed_landmarks_1, mappable_landmarks_2)
+            + self._landmark_loss(transformed_landmarks_2, mappable_landmarks_1)
+        ) / 2
+        loss = self._landmark_loss_weight * landmark_loss
+        loss_dict = {
+            "loss": loss.item(),
+            "landmark_loss": landmark_loss.item(),
+        }
+
+        loss, loss_dict = self._compute_regularity_losses(
+            regularity_deformations=regularity_deformations,
+            previous_loss=loss,
+            previous_loss_dict=loss_dict,
+        )
+        loss, loss_dict = self._compute_similarity_losses(
+            similarity_deformations=similarity_deformations,
+            image_1_mapping=image_1_mapping,
+            image_2_mapping=image_2_mapping,
+            previous_loss=loss,
+            previous_loss_dict=loss_dict,
+        )
+        assert loss is not None
+        assert loss_dict is not None
+
+        return loss, loss_dict
 
 
 class SITRegSegmentationTraining(SITRegTraining):
@@ -273,23 +388,30 @@ class SITRegSegmentationTraining(SITRegTraining):
         self,
         batch: Any,
     ) -> tuple[Tensor, dict[str, float]]:
-        (image_1, image_1_mask, image_1_seg), (
-            image_2,
-            image_2_mask,
-            image_2_seg,
-        ) = batch
+        (image_1, mask_1, augmentation_1, seg_1), (image_2, mask_2, augmentation_2, seg_2) = batch
 
         image_1 = image_1.to(self._devices[0])
-        image_1_mask = image_1_mask.to(self._devices[0])
-        image_1_seg = image_1_seg.to(self._devices[0])
+        mask_1 = self._handle_mask(mask_1.to(self._devices[0]))
+        seg_1 = seg_1.to(self._devices[0])
         image_2 = image_2.to(self._devices[0])
-        image_2_mask = image_2_mask.to(self._devices[0])
-        image_2_seg = image_2_seg.to(self._devices[0])
+        mask_2 = self._handle_mask(mask_2.to(self._devices[0]))
+        seg_2 = seg_2.to(self._devices[0])
+
+        augmentation_1_mapping: ComposableMapping = augmentation_1.as_mapping().cast(
+            device=self._devices[0]
+        )
+        augmentation_2_mapping: ComposableMapping = augmentation_2.as_mapping().cast(
+            device=self._devices[0]
+        )
+        image_1_mapping = self._image_as_mapping(image_1, mask_1) @ augmentation_1_mapping
+        image_2_mapping = self._image_as_mapping(image_2, mask_2) @ augmentation_2_mapping
+        seg_1_mapping = self._image_as_mapping(seg_1, mask_1) @ augmentation_1_mapping
+        seg_2_mapping = self._image_as_mapping(seg_2, mask_2) @ augmentation_2_mapping
 
         regularity_deformations, similarity_deformations, segmentation_deformations = (
             self._obtain_deformations(
-                image_1,
-                image_2,
+                image_1_mapping.sample().generate_values(),
+                image_2_mapping.sample().generate_values(),
                 mappings_for_levels_lists=(
                     [
                         (level_index, self._regularize_with_affine)
@@ -300,8 +422,6 @@ class SITRegSegmentationTraining(SITRegTraining):
                 ),
             )
         )
-        image_1_mapping = self._image_as_mapping(image_1, image_1_mask)
-        image_2_mapping = self._image_as_mapping(image_2, image_2_mask)
 
         loss, loss_dict = self._compute_regularity_losses(
             regularity_deformations=regularity_deformations,
@@ -315,8 +435,8 @@ class SITRegSegmentationTraining(SITRegTraining):
         )
         loss, loss_dict = self._compute_segmentation_losses(
             segmentation_deformations=segmentation_deformations,
-            seg_1_mapping=self._image_as_mapping(image_1_seg, image_1_mask),
-            seg_2_mapping=self._image_as_mapping(image_2_seg, image_2_mask),
+            seg_1_mapping=seg_1_mapping,
+            seg_2_mapping=seg_2_mapping,
             previous_loss=loss,
             previous_loss_dict=loss_dict,
         )
@@ -362,123 +482,3 @@ class SITRegSegmentationTraining(SITRegTraining):
                 seg_2=seg_1_mapping.sample(),
             )
         return loss, loss_dict
-
-
-class SITRegRegularityFineTuningTraining(BaseTrainingDefinition):
-    """Regularity fine tuning training for SITReg"""
-
-    def __init__(
-        self,
-        model: SITReg,
-        ndv_model: Module,
-        application_config: Mapping[str, Any],
-        args: TrainingDefinitionArgs,
-    ) -> None:
-        super().__init__(application_config)
-        self._devices = args.devices
-        training_config = application_config["training"]
-        optimizer_config = training_config["optimizer"]
-        self._model: SITReg = model
-        if args.n_training_processes > 1:
-            distributed_training_model = DistributedDataParallel(ndv_model)
-            self._training_ndv_model: Module = distributed_training_model
-            self._ndv_model = distributed_training_model.module
-        else:
-            self._training_ndv_model = ndv_model
-            self._ndv_model = ndv_model
-        self._optimizer = Adam(
-            params=list(self._ndv_model.parameters()),
-            lr=optimizer_config["learning_rate"],
-            betas=to_two_tuple(float, optimizer_config["betas"]),
-        )
-        self._lr_scheduler = ExponentialLR(
-            optimizer=self._optimizer,
-            gamma=optimizer_config["lr_decay"],
-        )
-        self._n_epochs = training_config["n_epochs"]
-        loss_config = training_config["loss"]
-        self._regularity_losses = create_losses(loss_config["regularity"], create_regularity_loss)
-        self._process_rank = args.training_process_rank
-
-    def update_weights(self, batch: Any) -> Mapping[str, float]:
-        (image_1, image_1_mask), (image_2, image_2_mask) = batch
-
-        if image_1.size(0) > 1:
-            raise RuntimeError("NDV training only supports batch size 1")
-
-        image_1 = image_1.to(self._devices[0])
-        image_1_mask = image_1_mask.to(self._devices[0])
-        image_2 = image_2.to(self._devices[0])
-        image_2_mask = image_2_mask.to(self._devices[0])
-
-        with no_grad():
-            deformations: MappingPair
-            deformations = self._model(
-                image_1,
-                image_2,
-                mappings_for_levels=((0, True),),
-            )[0]
-            forward_ddf = deformations.forward_mapping.sample(
-                DataFormat.voxel_displacements()
-            ).generate_values()
-            inverse_ddf = deformations.inverse_mapping.sample(
-                DataFormat.voxel_displacements()
-            ).generate_values()
-            ddfs = cat([forward_ddf, inverse_ddf], dim=0)
-
-        modifications = self._training_ndv_model(ddfs)
-        forward_modification, inverse_modification = modifications.chunk(2, dim=0)
-        modified_forward_ddf = forward_ddf + forward_modification
-        modified_inverse_ddf = inverse_ddf + inverse_modification
-
-        identity_loss = (
-            (forward_modification.square().sum(dim=1) + 1e-6).sqrt().mean()
-            + (inverse_modification.square().sum(dim=1) + 1e-6).sqrt().mean()
-        ) / 2
-
-        modified_forward_deformation = self._obtain_ddf_as_mapping(modified_forward_ddf)
-        modified_inverse_deformation = self._obtain_ddf_as_mapping(modified_inverse_ddf)
-
-        loss, loss_dict = get_combined_loss(
-            self._regularity_losses,
-            prefix="forward_",
-            weight=1 / 2,
-        )(
-            mapping=modified_forward_deformation,
-        )
-        loss, loss_dict = get_combined_loss(
-            self._regularity_losses,
-            prefix="inverse_",
-            previous_loss=loss,
-            previous_loss_dict=loss_dict,
-            weight=1 / 2,
-        )(
-            mapping=modified_inverse_deformation,
-        )
-
-        loss = identity_loss + loss
-
-        loss_dict["identity"] = identity_loss.item()
-        loss_dict["loss"] = loss.item()
-
-        self._optimizer.zero_grad(set_to_none=True)
-        logger.debug("Starting backward pass")
-        loss.backward()
-        self._optimizer.step()
-        self._lr_scheduler.step()
-        return loss_dict
-
-    def _obtain_ddf_as_mapping(self, ddf: Tensor) -> GridComposableMapping:
-        mapping = samplable_volume(
-            ddf,
-            coordinate_system=self._model.transformation_coordinate_system,
-            sampler=LinearInterpolator(),
-            data_format=DataFormat.voxel_displacements(),
-        )
-        return mapping
-
-    def get_optimizers(self) -> Mapping[str, Optimizer | LRScheduler]:
-        return {"optimizer": self._optimizer, "lr_scheduler": self._lr_scheduler}
-
-    def get_modules(self) -> Mapping[str, Module]:
-        return {"registration_network": self._model, "ndv_network": self._ndv_model}

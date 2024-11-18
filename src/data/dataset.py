@@ -1,26 +1,10 @@
 """Dataset implementatoins"""
 
 from math import perm
-from typing import Any, Sequence
+from typing import Any, NamedTuple, Sequence
 
-from composable_mapping import (
-    Affine,
-    CoordinateSystem,
-    ISampler,
-    LinearInterpolator,
-    NearestInterpolator,
-    samplable_volume,
-)
-from nibabel.affines import voxel_sizes
-from torch import (
-    Generator,
-    Tensor,
-    get_default_dtype,
-    ones_like,
-    rand,
-    randint,
-    randperm,
-)
+from composable_mapping import Affine, ComposableMapping, Identity
+from torch import Generator, Tensor, get_default_dtype, rand, randint, randperm, tensor
 
 from algorithm.affine_sampling import (
     AffineTransformationSamplingArguments,
@@ -34,6 +18,23 @@ from data.interface import (
     IVolumetricRegistrationInferenceDataset,
     VolumetricDataArgs,
 )
+
+
+class Augmentation(NamedTuple):
+    """Augmentation"""
+
+    type: str | Sequence[str]
+    parameters: Tensor
+
+    def as_mapping(self) -> ComposableMapping:
+        """Return augmentation as composable mapping"""
+        if isinstance(self.type, str):
+            raise ValueError("Collate the augmentations first before converting to mapping.")
+        if all(t == "identity" for t in self.type):
+            return Identity(dtype=self.parameters.dtype)
+        if all(t == "affine" for t in self.type):
+            return Affine.from_matrix(self.parameters)
+        raise ValueError(f"Unknown augmentation type: {self.type}")
 
 
 class VolumetricRegistrationTrainingDataset(BaseVariantDataset):
@@ -116,34 +117,27 @@ class VolumetricRegistrationTrainingDataset(BaseVariantDataset):
         first_case_mask = self._data.get_case_mask(
             first_case_name, args=self._data_args, registration_index=0
         )
-        first_affine = self._data.get_case_affine(
-            first_case_name, args=self._data_args, registration_index=0
-        )
         second_case = self._data.get_case_volume(
             second_case_name, args=self._data_args, registration_index=1
         )
         second_case_mask = self._data.get_case_mask(
             second_case_name, args=self._data_args, registration_index=1
         )
-        second_affine = self._data.get_case_affine(
-            second_case_name, args=self._data_args, registration_index=1
+        first_augmentation_parameters = self._affine_augmentations[index][0]
+        first_augmentation = (
+            Augmentation("identity", tensor([]))
+            if first_augmentation_parameters is None
+            else Augmentation("affine", first_augmentation_parameters)
         )
-        interpolator = LinearInterpolator()
+        second_augmentation_parameters = self._affine_augmentations[index][1]
+        second_augmentation = (
+            Augmentation("identity", tensor([]))
+            if second_augmentation_parameters is None
+            else Augmentation("affine", second_augmentation_parameters)
+        )
         return (
-            _apply_affine_augmentation(
-                first_case,
-                first_case_mask,
-                interpolator=interpolator,
-                affine_augmentation=self._affine_augmentations[index][0],
-                voxel_size=voxel_sizes(first_affine.numpy()),
-            ),
-            _apply_affine_augmentation(
-                second_case,
-                second_case_mask,
-                interpolator=interpolator,
-                affine_augmentation=self._affine_augmentations[index][1],
-                voxel_size=voxel_sizes(second_affine.numpy()),
-            ),
+            (first_case, first_case_mask, first_augmentation),
+            (second_case, second_case_mask, second_augmentation),
         )
 
 
@@ -151,75 +145,66 @@ class VolumetricRegistrationSegmentationTrainingDataset(VolumetricRegistrationTr
     """Training dataset with segmentation maps"""
 
     def _get_item(self, index: int, generation: int) -> Any:
+        item_1, item_2 = super()._get_item(index, generation)
         (
             first_case_name,
             second_case_name,
         ) = self._get_training_pair(index, generation)
-        first_case = self._data.get_case_volume(
-            first_case_name, args=self._data_args, registration_index=0
-        )
         first_segmentation = self._data.get_case_training_segmentation(
             first_case_name, args=self._data_args, registration_index=0
-        )
-        first_case_mask = self._data.get_case_mask(
-            first_case_name, args=self._data_args, registration_index=0
-        )
-        first_affine = self._data.get_case_affine(
-            first_case_name, args=self._data_args, registration_index=0
-        )
-        second_case = self._data.get_case_volume(
-            second_case_name, args=self._data_args, registration_index=1
         )
         second_segmentation = self._data.get_case_training_segmentation(
             second_case_name, args=self._data_args, registration_index=1
         )
-        second_case_mask = self._data.get_case_mask(
-            second_case_name, args=self._data_args, registration_index=1
-        )
-        second_affine = self._data.get_case_affine(
-            second_case_name, args=self._data_args, registration_index=1
-        )
-        interpolator = LinearInterpolator()
-        nearest_interpolator = NearestInterpolator()
-
-        augmented_first_segmentation = _apply_affine_augmentation(
-            first_segmentation,
-            None,
-            interpolator=nearest_interpolator,
-            affine_augmentation=self._affine_augmentations[index][0],
-            voxel_size=voxel_sizes(first_affine.numpy()),
-        )[0]
-        augmented_second_segmentation = _apply_affine_augmentation(
-            second_segmentation,
-            None,
-            interpolator=nearest_interpolator,
-            affine_augmentation=self._affine_augmentations[index][1],
-            voxel_size=voxel_sizes(second_affine.numpy()),
-        )[0]
-
         return (
-            _apply_affine_augmentation(
-                first_case,
-                first_case_mask,
-                interpolator=interpolator,
-                affine_augmentation=self._affine_augmentations[index][0],
-                voxel_size=voxel_sizes(first_affine.numpy()),
-            )
-            + (augmented_first_segmentation,),
-            _apply_affine_augmentation(
-                second_case,
-                second_case_mask,
-                interpolator=interpolator,
-                affine_augmentation=self._affine_augmentations[index][1],
-                voxel_size=voxel_sizes(second_affine.numpy()),
-            )
-            + (augmented_second_segmentation,),
+            item_1 + (first_segmentation,),
+            item_2 + (second_segmentation,),
         )
+
+
+class VolumetricRegistrationLandmarkTrainingDataset(VolumetricRegistrationTrainingDataset):
+    """Training dataset with landmarks"""
+
+    def _get_item(self, index: int, generation: int) -> Any:
+        item_1, item_2 = super()._get_item(index, generation)
+        (
+            first_case_name,
+            second_case_name,
+        ) = self._get_training_pair(index, generation)
+        item_1 = tuple(item_1)
+        item_2 = tuple(item_2)
+        landmarks_1 = self._data.get_case_landmarks(
+            first_case_name, args=self._data_args, registration_index=0
+        )
+        landmarks_2 = self._data.get_case_landmarks(
+            second_case_name, args=self._data_args, registration_index=1
+        )
+        if landmarks_1 is None or landmarks_2 is None:
+            raise ValueError("Landmarks are not available")
+        return item_1 + (landmarks_1,), item_2 + (landmarks_2,)
 
 
 class IntraCaseVolumetricRegistrationTrainingDataset(VolumetricRegistrationTrainingDataset):
     """Volumetric registration training dataset where registration is performed
     between two images of same case"""
+
+    @staticmethod
+    def _compute_num_pairs(n_training_cases: int) -> int:
+        return n_training_cases
+
+    def _get_training_pair(self, index: int, generation: int) -> tuple[str, str]:
+        training_pair_index = self._get_training_pair_index(index, generation)
+        return (
+            self._training_cases[training_pair_index],
+            self._training_cases[training_pair_index],
+        )
+
+
+class IntraCaseVolumetricRegistrationLandmarkTrainingDataset(
+    VolumetricRegistrationLandmarkTrainingDataset
+):
+    """Volumetric registration training dataset where registration is performed
+    between two images of same case together with landmarks"""
 
     @staticmethod
     def _compute_num_pairs(n_training_cases: int) -> int:
@@ -368,7 +353,6 @@ class VolumetricRegistrationTrainingDatasetWithReplacement(BaseVariantDataset):
     def _get_item(self, index: int, generation: int) -> Any:
         names = self._get_training_item(index)
         cases = []
-        interpolator = LinearInterpolator()
         for index, (name, affine_augmentation) in enumerate(
             zip(names, self._affine_augmentations[index])
         ):
@@ -376,19 +360,7 @@ class VolumetricRegistrationTrainingDatasetWithReplacement(BaseVariantDataset):
                 name, args=self._data_args, registration_index=index
             )
             mask = self._data.get_case_mask(name, args=self._data_args, registration_index=index)
-            affine = self._data.get_case_affine(
-                name, args=self._data_args, registration_index=index
-            )
-            voxel_size = voxel_sizes(affine.numpy())
-            cases.append(
-                _apply_affine_augmentation(
-                    volume,
-                    mask,
-                    interpolator=interpolator,
-                    affine_augmentation=affine_augmentation,
-                    voxel_size=voxel_size,
-                )
-            )
+            cases.append((volume, mask, affine_augmentation))
         return tuple(cases)
 
 
@@ -430,35 +402,6 @@ class CyclicRegistrationDistributedDatasetAdapter(IVariantDataset):
         return output
 
 
-def _apply_affine_augmentation(
-    volume: Tensor,
-    mask: Tensor | None,
-    interpolator: ISampler,
-    affine_augmentation: Tensor | None,
-    voxel_size: Sequence[float],
-) -> tuple[Tensor, Tensor]:
-    if affine_augmentation is None:
-        if mask is None:
-            mask = ones_like(volume)
-        return (volume, mask)
-    coordinate_system = CoordinateSystem.centered_normalized(
-        volume.shape[1:],
-        voxel_size=voxel_size,
-        dtype=volume.dtype,
-        device=volume.device,
-    )
-    mapping = samplable_volume(
-        data=volume[None],
-        coordinate_system=coordinate_system,
-        sampler=interpolator,
-        mask=mask[None] if mask is not None else None,
-    )
-    affine_mapping = Affine.from_matrix(affine_augmentation)
-
-    augmented = (mapping @ affine_mapping).sample()
-    return augmented.generate_values()[0], augmented.generate_mask()[0]
-
-
 def _sample_affines(
     affine_augmentation_arguments: AffineTransformationSamplingArguments | None,
     affine_augmentation_prob: float | None,
@@ -482,7 +425,7 @@ def _sample_affines(
                         arguments=affine_augmentation_arguments,
                         generator=random_generator,
                         dtype=get_default_dtype(),
-                    )
+                    )[0]
                 )
             else:
                 affines.append(None)

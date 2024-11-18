@@ -534,6 +534,11 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
     def get_train_cases(self) -> Sequence[str]:
         """Get training cases"""
 
+    def get_case_landmarks(
+        self, case_name: str, args: VolumetricDataArgs, registration_index: int
+    ) -> Tensor:
+        raise NotImplementedError()
+
 
 class BaseVolumetricRegistrationInferenceFactory(BaseInferenceFactory):
     """Oasis inference factory"""

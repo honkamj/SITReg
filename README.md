@@ -26,7 +26,13 @@ For this section we assume that you have navigated to directory ''src'' and have
 
 ### Training
 
-If you run into problems with reproducing the results in the paper, do not hesitate to contact the authors.
+Here you can find commands which can be used to train the model with different datasets. If you run into problems with reproducing the results in the paper, do not hesitate to contact the authors.
+
+The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices (in those cases, just run the command with single "--devices cpu" flag for data downloading first), or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
+
+For all the methods we chose the best epoch based on metrics computed on validation set (see [Evaluation](#evaluation)). The training is somewhat heavy but converges very fast, and some configs might have unneccesarily large number of epochs. E.g. Lung250M-4B training converges already during the first epoch (5000 training pairs) and no improvement is seen after that.
+
+**OASIS:**
 
 To train similar model used in the paper with affinely aligned brain OASIS dataset (https://www.oasis-brains.org/) from Learn2Reg (https://learn2reg.grand-challenge.org/), run the following command:
 
@@ -36,21 +42,21 @@ To train similar model used in the paper with raw (not affinely aligned) brain O
 
     python train.py --config scripts/configs/sitreg/oasis/cc_grad_1.0_raw_data.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
+**LPBA40:**
+
 To train similar model used in the paper with LPBA40 dataset (https://resource.loni.usc.edu/resources/atlases-downloads/), run the following command:
 
     python train.py --config scripts/configs/sitreg/lpba40/cc_grad_1.0_very_very_deep.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
+
+**Lung250M-4B:**
 
 To train similar model used in the paper with Lung250M-4B dataset (https://github.com/multimodallearning/Lung250M-4B), run the following command:
 
     python train.py --config scripts/configs/sitreg/lung250m_4b/cc_grad_1.0_very_deep_half_res.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0
 
-Note that the Lung250M-4B config is not identical to the one used in the paper, as it includes masking out invalid regions for similarity loss, which improves the results. The feature was disabled in the experiments since other methods did not have such property, and we wanted to compare architectures, not loss functions. One can replicate the results in the paper by setting "ignore_mask" to "True" in the config.
+Note that the Lung250M-4B config is not identical to the one used in the paper, as it includes masking out invalid regions for similarity loss, which improves the results. The feature was disabled in the experiments since other methods did not have such property, and we wanted to compare architectures, not loss functions. One can replicate the results in the paper by setting "ignore_mask" to "True" in the config. Also, we do not use the keypoints provided as part of the training set.
 
-The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices (in those cases, just run the command with single "--devices cpu" flag for data downloading first), or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
-
-For all the methods we chose the best epoch based on metrics computed on validation set (see [Evaluation](#evaluation)). The training is somewhat heavy but converges very fast, and some configs might have unneccesarily large number of epochs. E.g. Lung250M-4B training converges already during the first epoch (5000 training pairs) and no improvement is seen after that.
-
-### Training for Learn2reg 2024 challenge submission
+***LUMIR (Learn2reg 2024 winner)***
 
 To train similar model to our submission to Learn2reg 2024 LUMIR task, first run the following command:
 

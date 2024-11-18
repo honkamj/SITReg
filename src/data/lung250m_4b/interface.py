@@ -30,11 +30,11 @@ def _create_training_dataset(
         seed=data_config["seed"],
         pairs_per_epoch=data_config["training_pairs_per_epoch"],
         n_training_cases=data_config["n_training_cases"],
-        affine_augmentation_arguments=AffineTransformationSamplingArguments(
-            **data_config["affine_augmentation_arguments"]
-        )
-        if data_config.get("affine_augmentation_arguments") is not None
-        else None,
+        affine_augmentation_arguments=(
+            AffineTransformationSamplingArguments(**data_config["affine_augmentation_arguments"])
+            if data_config.get("affine_augmentation_arguments") is not None
+            else None
+        ),
         affine_augmentation_prob=data_config.get("affine_augmentation_prob"),
     )
 

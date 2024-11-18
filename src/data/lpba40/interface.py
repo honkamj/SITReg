@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from algorithm.affine_sampling import AffineTransformationSamplingArguments
 from data.dataset import (
     VolumetricRegistrationInferenceDataset,
     VolumetricRegistrationTrainingDataset,
@@ -39,6 +40,12 @@ def create_training_data_loader(
         seed=data_config["seed"],
         pairs_per_epoch=data_config["training_pairs_per_epoch"],
         n_training_cases=data_config["n_training_cases"],
+        affine_augmentation_arguments=(
+            AffineTransformationSamplingArguments(**data_config["affine_augmentation_arguments"])
+            if data_config.get("affine_augmentation_arguments") is not None
+            else None
+        ),
+        affine_augmentation_prob=data_config.get("affine_augmentation_prob"),
     )
     generate_new_variant = training_dataset.generate_new_variant
     if args.n_training_processes > 1:

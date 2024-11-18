@@ -4,6 +4,7 @@ from logging import getLogger
 from typing import Any, Mapping, Sequence, TypeVar
 
 from composable_mapping import (
+    ComposableMapping,
     DataFormat,
     GridComposableMapping,
     Identity,
@@ -34,7 +35,7 @@ T = TypeVar("T")
 
 
 class SITRegDistributedConsistencyTraining(SITRegTraining):
-    """Distributed training for SITReg with group consistency loss"""
+    """Distributed training for SITReg with population consistency loss"""
 
     def __init__(
         self,
@@ -96,18 +97,13 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
 
     def _compute_pairwise_losses(
         self,
-        image_1: Tensor,
-        image_1_mask: Tensor,
-        image_2: Tensor,
-        image_2_mask: Tensor,
+        image_1_mapping: GridComposableMapping,
+        image_2_mapping: GridComposableMapping,
     ) -> tuple[Tensor, Mapping[str, Tensor], Tensor, Tensor]:
-        image_1_mapping = self._image_as_mapping(image_1, image_1_mask)
-        image_2_mapping = self._image_as_mapping(image_2, image_2_mask)
-
         regularity_deformations, similarity_deformations, consistency_deformations = (
             self._obtain_deformations(
-                image_1=image_1,
-                image_2=image_2,
+                image_1=image_1_mapping.sample().generate_values(),
+                image_2=image_2_mapping.sample().generate_values(),
                 mappings_for_levels_lists=(
                     [
                         (level_index, self._regularize_with_affine)
@@ -144,23 +140,58 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
         self,
         batch: Any,
     ) -> tuple[Tensor, dict[str, float]]:
-        (image_1, image_mask_1), (image_2, image_mask_2), (image_3, image_mask_3) = batch
+        (
+            (image_1, mask_1, augmentation_1),
+            (image_2, mask_2, augmentation_2),
+            (image_3, mask_3, augmentation_3),
+        ) = batch
 
-        image_mask_1 = image_mask_1.to(self._devices[0])
-        image_mask_2 = image_mask_2.to(self._devices[0])
-        image_mask_3 = image_mask_3.to(self._devices[0])
+        mask_1 = self._handle_mask(mask_1.to(self._devices[0]))
+        mask_2 = self._handle_mask(mask_2.to(self._devices[0]))
+        mask_3 = self._handle_mask(mask_3.to(self._devices[0]))
 
         images = [image_1, image_2, image_3]
-        masks = [image_mask_1, image_mask_2, image_mask_3]
+        masks = [mask_1, mask_2, mask_3]
+        augmentations: list[ComposableMapping] = [
+            augmentation_1.as_mapping(),
+            augmentation_2.as_mapping(),
+            augmentation_3.as_mapping(),
+        ]
+
+        pair_augmentation_1_mapping = augmentations[self._process_within_group_rank % 3].cast(
+            device=self._devices[0]
+        )
+        pair_augmentation_2_mapping = augmentations[(self._process_within_group_rank + 1) % 3].cast(
+            device=self._devices[0]
+        )
 
         loss, tensor_loss_dict, forward_ddf, inverse_ddf = self._compute_pairwise_losses(
-            image_1=images[self._process_within_group_rank % 3].to(self._devices[0]),
-            image_1_mask=self._handle_mask(masks[self._process_within_group_rank % 3]),
-            image_2=images[(self._process_within_group_rank + 1) % 3].to(self._devices[0]),
-            image_2_mask=self._handle_mask(masks[(self._process_within_group_rank + 1) % 3]),
+            image_1_mapping=self._image_as_mapping(
+                images[self._process_within_group_rank % 3].to(self._devices[0]),
+                mask=masks[self._process_within_group_rank % 3],
+            )
+            @ pair_augmentation_1_mapping,
+            image_2_mapping=self._image_as_mapping(
+                images[(self._process_within_group_rank + 1) % 3].to(self._devices[0]),
+                mask=masks[(self._process_within_group_rank + 1) % 3],
+            )
+            @ pair_augmentation_2_mapping,
         )
         loss = loss.mean()
         loss_dict = average_tensor_loss_dict(tensor_loss_dict)
+
+        forward_ddf = (
+            (pair_augmentation_1_mapping @ self._ddf_as_mapping(forward_ddf))
+            .sample(data_format=DataFormat.voxel_displacements())
+            .generate_values()
+            .contiguous()
+        )
+        inverse_ddf = (
+            (pair_augmentation_2_mapping @ self._ddf_as_mapping(inverse_ddf))
+            .sample(data_format=DataFormat.voxel_displacements())
+            .generate_values()
+            .contiguous()
+        )
 
         forward_ddfs = [
             forward_ddf if rank == self._process_within_group_rank else empty_like(forward_ddf)
@@ -201,17 +232,15 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
             inverse_ddf_2=inverse_ddfs[1],
             forward_ddf_3=forward_ddfs[2],
             inverse_ddf_3=inverse_ddfs[2],
-            mask_1=image_mask_1.to(self._devices[0]),
-            mask_2=image_mask_2.to(self._devices[0]),
-            mask_3=image_mask_3.to(self._devices[0]),
+            mask_1=mask_1,
+            mask_2=mask_2,
+            mask_3=mask_3,
             loss=loss,
             loss_dict=loss_dict,
         )
         return loss, loss_dict
 
-    def _obtain_ddf_as_mapping(
-        self, ddf: Tensor, mask: Tensor | None = None
-    ) -> GridComposableMapping:
+    def _ddf_as_mapping(self, ddf: Tensor, mask: Tensor | None = None) -> GridComposableMapping:
         mapping = samplable_volume(
             ddf,
             mask=mask,
@@ -266,16 +295,16 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
     ) -> tuple[Tensor, dict[str, float]]:
         final_mappings = [
             MappingPair(
-                forward_mapping=self._obtain_ddf_as_mapping(forward_ddf_1, mask=mask_2),
-                inverse_mapping=self._obtain_ddf_as_mapping(inverse_ddf_1, mask=mask_1),
+                forward_mapping=self._ddf_as_mapping(forward_ddf_1, mask=mask_2),
+                inverse_mapping=self._ddf_as_mapping(inverse_ddf_1, mask=mask_1),
             ),
             MappingPair(
-                forward_mapping=self._obtain_ddf_as_mapping(forward_ddf_2, mask=mask_3),
-                inverse_mapping=self._obtain_ddf_as_mapping(inverse_ddf_2, mask=mask_2),
+                forward_mapping=self._ddf_as_mapping(forward_ddf_2, mask=mask_3),
+                inverse_mapping=self._ddf_as_mapping(inverse_ddf_2, mask=mask_2),
             ),
             MappingPair(
-                forward_mapping=self._obtain_ddf_as_mapping(forward_ddf_3, mask=mask_1),
-                inverse_mapping=self._obtain_ddf_as_mapping(inverse_ddf_3, mask=mask_3),
+                forward_mapping=self._ddf_as_mapping(forward_ddf_3, mask=mask_1),
+                inverse_mapping=self._ddf_as_mapping(inverse_ddf_3, mask=mask_3),
             ),
         ]
 

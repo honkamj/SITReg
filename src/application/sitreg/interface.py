@@ -22,6 +22,7 @@ from application.sitreg.inference import (
     SITRegInference,
 )
 from application.sitreg.training import (
+    SITRegLandmarkTraining,
     SITRegSegmentationTraining,
     SITRegTraining,
 )
@@ -125,6 +126,18 @@ def create_distributed_consistency_training_definition(
     """Create distributed consistency training definition based on config"""
     model = create_model(application_config["model"], device=args.devices[0])
     return SITRegDistributedConsistencyTraining(
+        model=model,
+        application_config=application_config,
+        args=args,
+    )
+
+
+def create_landmark_training_definition(
+    application_config: Mapping[str, Any], args: TrainingDefinitionArgs
+) -> ITrainingDefinition:
+    """Create landmark training definition based on config"""
+    model = create_model(application_config["model"], device=args.devices[0])
+    return SITRegLandmarkTraining(
         model=model,
         application_config=application_config,
         args=args,
