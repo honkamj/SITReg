@@ -364,44 +364,6 @@ class VolumetricRegistrationTrainingDatasetWithReplacement(BaseVariantDataset):
         return tuple(cases)
 
 
-class CyclicRegistrationDistributedDatasetAdapter(IVariantDataset):
-    """Volumetric registration training dataset where permutations are sampled with replacement
-
-    This dataset is used for training with replacement, where each permutation
-    can occur mutiple times before any given other permuation occurs. Suitable
-    for training with large number of cases.
-    """
-
-    def __init__(
-        self,
-        dataset: IVariantDataset,
-        n_items_per_step: int,
-        process_rank: int,
-        include_first_mask_for_all: bool = False,
-    ) -> None:
-        super().__init__()
-        self._dataset = dataset
-        self._process_rank = process_rank
-        self._n_items_per_step = n_items_per_step
-        self._include_first_mask_for_all = include_first_mask_for_all
-
-    def generate_new_variant(self) -> None:
-        """Generate new variant"""
-        self._dataset.generate_new_variant()
-
-    def __len__(self) -> int:
-        return len(self._dataset)
-
-    def __getitem__(self, index: int) -> Any:
-        items = self._dataset[index]
-        first_item_index = self._process_rank % self._n_items_per_step
-        second_item_index = (self._process_rank + 1) % self._n_items_per_step
-        output: tuple = items[first_item_index], items[second_item_index]
-        if self._include_first_mask_for_all:
-            output += (items[0][1],)
-        return output
-
-
 def _sample_affines(
     affine_augmentation_arguments: AffineTransformationSamplingArguments | None,
     affine_augmentation_prob: float | None,
