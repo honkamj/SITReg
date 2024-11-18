@@ -13,7 +13,6 @@ from algorithm.affine_sampling import (
 from algorithm.nth_permutation import nth_permutation_indices
 from data.base import BaseVariantDataset
 from data.interface import (
-    IVariantDataset,
     IVolumetricRegistrationData,
     IVolumetricRegistrationInferenceDataset,
     VolumetricDataArgs,
