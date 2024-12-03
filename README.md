@@ -56,7 +56,7 @@ To train similar model used in the paper with Lung250M-4B dataset (https://githu
 
 Note that the Lung250M-4B config is not identical to the one used in the paper, as it includes masking out invalid regions for similarity loss, which improves the results. The feature was disabled in the experiments since other methods did not have such property, and we wanted to compare architectures, not loss functions. One can replicate the results in the paper by setting "ignore_mask" to "True" in the config. Also, we do not use the keypoints provided as part of the training set.
 
-**LUMIR (Learn2reg 2024 winner)**
+**LUMIR (Learn2reg 2024 winner):**
 
 To train similar model to our submission to Learn2reg 2024 LUMIR task, first run the following command:
 
