@@ -359,7 +359,12 @@ class VolumetricRegistrationTrainingDatasetWithReplacement(BaseVariantDataset):
                 name, args=self._data_args, registration_index=index
             )
             mask = self._data.get_case_mask(name, args=self._data_args, registration_index=index)
-            cases.append((volume, mask, affine_augmentation))
+            augmentation = (
+                Augmentation("identity", tensor([]))
+                if affine_augmentation is None
+                else Augmentation("affine", affine_augmentation)
+            )
+            cases.append((volume, mask, augmentation))
         return tuple(cases)
 
 

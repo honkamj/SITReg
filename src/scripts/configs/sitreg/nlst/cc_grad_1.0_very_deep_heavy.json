@@ -15,7 +15,14 @@
 		    	"test": ["sampled_determinant", "inverse_consistency", "landmark"]
 		    },
             "n_jacobian_samples_in_evaluation": 1000000,
-            "jacobian_sampling_base_seed": 8524561973
+            "jacobian_sampling_base_seed": 8524561973,
+            "affine_augmentation_prob": 0.9,
+            "affine_augmentation_arguments": {
+                "translation_stds": [0.025, 0.025, 0.025],
+                "rotation_stds": [5.0, 5.0, 5.0],
+                "logscale_stds": [0.05, 0.05, 0.05],
+                "logshear_stds": [0.025, 0.025, 0.025]
+            }
         }
     },
     "application": {
@@ -30,12 +37,12 @@
         	},
             "model": {
                 "n_features_per_resolution": [
-                    8,
-                    36,
-                    36,
-                    36,
-                    36,
-                    36
+                    12,
+                    32,
+                    64,
+                    128,
+                    128,
+                    128
                 ],
                 "n_feature_convolutions_per_resolution": [
                     2,
@@ -46,12 +53,12 @@
                     2
                 ],
                 "n_transformation_features_per_resolution": [
-                    16,
-                    62,
-                    62,
-                    62,
-                    62,
-                    62
+                    12,
+                    64,
+                    128,
+                    256,
+                    256,
+                    256
                 ],
                 "n_transformation_convolutions_per_resolution": [
                     2,
@@ -106,7 +113,7 @@
                 }
             },
             "training": {
-                "n_epochs": 4,
+                "n_epochs": 10,
                 "optimizer": {
                     "learning_rate": 1e-4,
                     "betas": [0.9, 0.999]
@@ -119,7 +126,8 @@
                                 "name": "ncc",
                                 "type": "LocalNormalizedCrossCorrelationLoss",
                                 "args": {
-                                    "window_size": 7
+                                    "window_size": 11,
+                                    "separable": true
                                 }
                             }
                         ]
