@@ -6,7 +6,7 @@ from itertools import product
 from logging import getLogger
 from multiprocessing import Value
 from os import environ, listdir, makedirs
-from os.path import isdir, isfile, join
+from os.path import join, getsize
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.error import HTTPError
 
@@ -19,6 +19,7 @@ from composable_mapping import (
     mappable,
     samplable_volume,
 )
+from fasteners import InterProcessLock # type: ignore
 from numpy import ones as np_ones
 from numpy.ma import masked_invalid as np_masked_invalid
 from surface_distance import (  # type: ignore
@@ -65,7 +66,9 @@ class BaseVariantDataset(IVariantDataset):
         self._local_generation = -1
 
     @abstractmethod
-    def _generate_new_variant(self, random_generator: Generator, generation: int) -> None:
+    def _generate_new_variant(
+        self, random_generator: Generator, generation: int
+    ) -> None:
         """Generate new variant of the dataset
 
         This is called always at least once when fetching the first item
@@ -109,6 +112,7 @@ class BaseDataDownloader(IDataDownloader):
 
     def __init__(self, dataset_name: str) -> None:
         self._dataset_name = dataset_name
+        self._timestamp_file_name = "timestamp.txt"
 
     @abstractmethod
     def _download_and_process(self, data_folder: str) -> None:
@@ -124,47 +128,53 @@ class BaseDataDownloader(IDataDownloader):
         Returns: Path to the data folder
         """
         data_folder = self._get_data_folder(data_root)
-        if not self._is_downloaded(data_folder):
-            if environ.get("AGREE_TO_DATA_TERMS_OF_USE_cuRfC7gemUBKVGZv91ey", "").lower() != "true":
-                answer = input(self._get_license_agreement_question())
-                if answer != "y":
-                    raise RuntimeError(
-                        "Can not download the dataset without agreeing to the terms of use!"
-                    )
-            self._ensure_target_folder_empty(data_folder)
-            self._create_data_folder(data_folder)
-            try:
-                self._download_and_process(data_folder)
-            except HTTPError:
-                logger.error("Downloading the data failed.")
-                raise
-            self._write_timestamp(data_folder)
+        self._create_data_folder(data_folder)
+        with InterProcessLock(self._get_timestamp_path(data_folder)):
+            if not self._is_downloaded(data_folder):
+                if (
+                    environ.get(
+                        "AGREE_TO_DATA_TERMS_OF_USE_cuRfC7gemUBKVGZv91ey", ""
+                    ).lower()
+                    != "true"
+                ):
+                    answer = input(self._get_license_agreement_question())
+                    if answer != "y":
+                        raise RuntimeError(
+                            "Can not download the dataset without agreeing to the terms of use!"
+                        )
+                self._ensure_target_folder_empty(data_folder)
+                try:
+                    self._download_and_process(data_folder)
+                except HTTPError:
+                    logger.error("Downloading the data failed.")
+                    raise
+                self._write_timestamp(data_folder)
         return data_folder
 
     def _get_data_folder(self, data_root: str) -> str:
         return join(data_root, self._dataset_name)
 
-    @staticmethod
-    def _is_downloaded(data_folder: str) -> bool:
-        return isfile(join(data_folder, "timestamp.txt"))
+    def _is_downloaded(self, data_folder: str) -> bool:
+        return getsize(self._get_timestamp_path(data_folder)) > 0
 
-    @staticmethod
-    def _ensure_target_folder_empty(data_folder: str) -> None:
-        if isdir(data_folder):
-            if len(listdir(data_folder)) != 0:
-                raise RuntimeError(
-                    f"Target directory {data_folder} is not empty. "
-                    "If you have already downloaded the data manually, "
-                    'add "timestamp.txt" file manually into the directory.'
-                )
+    def _get_timestamp_path(self, data_folder: str) -> str:
+        return join(data_folder, self._timestamp_file_name)
+
+    def _ensure_target_folder_empty(self, data_folder: str) -> None:
+        folder_contents = listdir(data_folder)
+        if len(folder_contents) != 1 or (
+            len(folder_contents) == 1 and folder_contents[0] != self._timestamp_file_name
+        ):
+            raise RuntimeError(f"Target directory {data_folder} is not empty.")
 
     @staticmethod
     def _create_data_folder(data_folder: str) -> None:
         makedirs(data_folder, exist_ok=True)
 
-    @staticmethod
-    def _write_timestamp(data_folder: str) -> None:
-        with open(join(data_folder, "timestamp.txt"), mode="w", encoding="utf-8") as timestamp_file:
+    def _write_timestamp(self, data_folder: str) -> None:
+        with open(
+            self._get_timestamp_path(data_folder), mode="w", encoding="utf-8"
+        ) as timestamp_file:
             timestamp_file.write(str(datetime.now()))
 
 
@@ -218,7 +228,9 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
     ) -> None:
         self._data_location = data_downloader.download(data_root)
         self._included_segmentation_class_indices = included_segmentation_class_indices
-        self._training_segmentation_class_index_groups = training_segmentation_class_index_groups
+        self._training_segmentation_class_index_groups = (
+            training_segmentation_class_index_groups
+        )
 
     def _get_output_shape_after_first_crop(
         self,
@@ -255,7 +267,9 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
             downsampling_factor = args.downsampling_factor
         return [
             dim_size // dim_downsampling_factor
-            for dim_size, dim_downsampling_factor in zip(shape_after_crops, downsampling_factor)
+            for dim_size, dim_downsampling_factor in zip(
+                shape_after_crops, downsampling_factor
+            )
         ]
 
     @abstractmethod
@@ -420,7 +434,9 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
         if self._included_segmentation_class_indices is None:
             raise ValueError("Please specify included segmentation class indices")
         enumerated_segmentation_labels = segmentation_one_hot.argmax(dim=0)
-        segmentation_labels = empty(enumerated_segmentation_labels.shape, dtype=get_default_dtype())
+        segmentation_labels = empty(
+            enumerated_segmentation_labels.shape, dtype=get_default_dtype()
+        )
         for index, label_index in enumerate(self._included_segmentation_class_indices):
             segmentation_labels[enumerated_segmentation_labels == index] = label_index
         return segmentation_labels
@@ -477,10 +493,14 @@ class BaseVolumetricRegistrationData(IVolumetricRegistrationData):
         slices: list[slice] = []
         for target, current in zip(reversed(target_shape), reversed(current_shape)):
             if current > target:
-                slices.insert(0, slice((current - target) // 2, -((current - target + 1) // 2)))
+                slices.insert(
+                    0, slice((current - target) // 2, -((current - target + 1) // 2))
+                )
             else:
                 slices.insert(0, slice(None))
-            padding.extend([max((target - current) // 2, 0), max((target - current + 1) // 2, 0)])
+            padding.extend(
+                [max((target - current) // 2, 0), max((target - current + 1) // 2, 0)]
+            )
         if padding:
             image = pad(image, padding)
         if slices:
@@ -656,23 +676,23 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
             ):
                 metrics.update(
                     self._compute_inverse_consistency_metrics(
-                        forward_displacement_field=inference_outputs["forward_displacement_field"][
-                            index_0
-                        ],
-                        inverse_displacement_field=inference_outputs["inverse_displacement_field"][
-                            index_1
-                        ],
+                        forward_displacement_field=inference_outputs[
+                            "forward_displacement_field"
+                        ][index_0],
+                        inverse_displacement_field=inference_outputs[
+                            "inverse_displacement_field"
+                        ][index_1],
                         prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_",
                     )
                 )
                 metrics.update(
                     self._compute_inverse_consistency_metrics(
-                        forward_displacement_field=inference_outputs["inverse_displacement_field"][
-                            index_1
-                        ],
-                        inverse_displacement_field=inference_outputs["forward_displacement_field"][
-                            index_0
-                        ],
+                        forward_displacement_field=inference_outputs[
+                            "inverse_displacement_field"
+                        ][index_1],
+                        inverse_displacement_field=inference_outputs[
+                            "forward_displacement_field"
+                        ][index_0],
                         prefix=f"{self._evaluation_prefix}input_orders_{index_0}_{index_1}_reverse_",  # pylint: disable=line-too-long
                     )
                 )
@@ -726,21 +746,33 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
             data_format=DataFormat.voxel_displacements(),
         )
         forward_composition_ddf, forward_composition_mask = (
-            (forward_mapping @ inverse_mapping).sample(DataFormat.voxel_displacements()).generate()
+            (forward_mapping @ inverse_mapping)
+            .sample(DataFormat.voxel_displacements())
+            .generate()
         )
         assert forward_composition_mask is not None
         forward_composition_n_voxels = forward_composition_mask.sum()
-        forward_composition_ddf_masked = forward_composition_ddf * forward_composition_mask
+        forward_composition_ddf_masked = (
+            forward_composition_ddf * forward_composition_mask
+        )
         return {
-            f"{prefix}inverse_consistency_mse": forward_composition_ddf.square().mean().item(),
+            f"{prefix}inverse_consistency_mse": forward_composition_ddf.square()
+            .mean()
+            .item(),
             f"{prefix}inverse_consistency_mse_masked": (
-                forward_composition_ddf_masked.square().sum() / (3 * forward_composition_n_voxels)
+                forward_composition_ddf_masked.square().sum()
+                / (3 * forward_composition_n_voxels)
             ).item(),
-            f"{prefix}inverse_consistency_mae": forward_composition_ddf.abs().mean().item(),
+            f"{prefix}inverse_consistency_mae": forward_composition_ddf.abs()
+            .mean()
+            .item(),
             f"{prefix}inverse_consistency_mae_masked": (
-                forward_composition_ddf_masked.abs().sum() / (3 * forward_composition_n_voxels)
+                forward_composition_ddf_masked.abs().sum()
+                / (3 * forward_composition_n_voxels)
             ).item(),
-            f"{prefix}inverse_consistency_max": forward_composition_ddf.abs().max().item(),
+            f"{prefix}inverse_consistency_max": forward_composition_ddf.abs()
+            .max()
+            .item(),
             f"{prefix}inverse_consistency_max_masked": forward_composition_ddf_masked.abs()
             .max()
             .item(),
@@ -757,12 +789,16 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
         (
             n_negative_determinants_crop_last,
             det_std_crop_last,
-        ) = self._determinant_metrics(displacement_field, other_dims="crop_last", central=False)
+        ) = self._determinant_metrics(
+            displacement_field, other_dims="crop_last", central=False
+        )
         n_negative_determinants_central, det_std_central = self._determinant_metrics(
             displacement_field, other_dims="crop", central=True
         )
         n_voxels = int(
-            as_tensor(displacement_field.shape[1:], device=displacement_field.device).prod()
+            as_tensor(
+                displacement_field.shape[1:], device=displacement_field.device
+            ).prod()
         )
         return {
             f"{prefix}n_negative_determinants_avg_along_other_dims": n_negative_determinants_avg,
@@ -820,7 +856,9 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
         jacobian_matrices = estimate_spatial_derivatives(
             mapping=lambda x: mapping(mappable(x)).generate_values(),
             points=evaluation_points,
-            perturbation=mapping.coordinate_system.grid_spacing().reshape(-1, n_dims)[0, 0].item()
+            perturbation=mapping.coordinate_system.grid_spacing()
+            .reshape(-1, n_dims)[0, 0]
+            .item()
             * 1e-7,
         )
         determinants = calculate_determinant(jacobian_matrices)
@@ -860,7 +898,9 @@ class BaseVolumetricRegistrationEvaluator(BaseEvaluator):
         } | super().evaluation_inference_outputs
 
 
-class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistrationEvaluator):
+class BaseVolumetricRegistrationSegmentationEvaluator(
+    BaseVolumetricRegistrationEvaluator
+):
     """Base volumetric registration segmentation evaluator"""
 
     def __init__(
@@ -910,15 +950,17 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistration
                     upsampling_factor = (1,) * (ddf.ndim - 1)
                 else:
                     upsampling_factor = self._upsampling_factor
-                scaling_factor = tensor(upsampling_factor, device=ddf.device, dtype=ddf.dtype)[
-                    (...,) + (None,) * (ddf.ndim - 1)
-                ]
+                scaling_factor = tensor(
+                    upsampling_factor, device=ddf.device, dtype=ddf.dtype
+                )[(...,) + (None,) * (ddf.ndim - 1)]
                 upsampler = CubicSplineUpsampling(
                     upsampling_factor=upsampling_factor, dtype=ddf.dtype
                 )
                 upsampler.to(ddf.device)
                 upsampled_ddf = (
-                    upsampler(ddf[None], apply_prefiltering=True, prefilter_inplace=True)[0]
+                    upsampler(
+                        ddf[None], apply_prefiltering=True, prefilter_inplace=True
+                    )[0]
                     * scaling_factor
                 )
                 updated_ddfs.append(upsampled_ddf)
@@ -947,8 +989,10 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistration
                     displacement_field=forward_displacement_field,
                 )
                 if evaluation_temp_folder is not None:
-                    forward_seg_resampled_storage = self._source_temp_storage_factory.create(
-                        f"{self._source_name}-{self._target_name}_seg_resampled"
+                    forward_seg_resampled_storage = (
+                        self._source_temp_storage_factory.create(
+                            f"{self._source_name}-{self._target_name}_seg_resampled"
+                        )
                     )
                     forward_seg_resampled_storage.save(
                         transformed_source_mask_seg, evaluation_temp_folder
@@ -970,8 +1014,10 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistration
                     displacement_field=inverse_displacement_field,
                 )
                 if evaluation_temp_folder is not None:
-                    inverse_seg_resampled_storage = self._target_temp_storage_factory.create(
-                        f"{self._target_name}-{self._source_name}_seg_resampled"
+                    inverse_seg_resampled_storage = (
+                        self._target_temp_storage_factory.create(
+                            f"{self._target_name}-{self._source_name}_seg_resampled"
+                        )
                     )
                     inverse_seg_resampled_storage.save(
                         transformed_target_mask_seg, evaluation_temp_folder
@@ -1048,8 +1094,12 @@ class BaseVolumetricRegistrationSegmentationEvaluator(BaseVolumetricRegistration
         dice_metrics: dict[str, float] = {}
         hd95_metrics: dict[str, float] = {}
         for name, indices in names_to_indices.items():
-            organ_mask_1 = zeros(organs_mask_1.shape, dtype=torch_bool, device=organs_mask_1.device)
-            organ_mask_2 = zeros(organs_mask_2.shape, dtype=torch_bool, device=organs_mask_2.device)
+            organ_mask_1 = zeros(
+                organs_mask_1.shape, dtype=torch_bool, device=organs_mask_1.device
+            )
+            organ_mask_2 = zeros(
+                organs_mask_2.shape, dtype=torch_bool, device=organs_mask_2.device
+            )
             for index in indices:
                 organ_mask_1 |= organs_mask_1 == index
                 organ_mask_2 |= organs_mask_2 == index

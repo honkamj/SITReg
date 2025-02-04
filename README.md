@@ -28,7 +28,7 @@ For this section we assume that you have navigated to directory ''src'' and have
 
 Here you can find commands which can be used to train the model with different datasets. If you run into problems with reproducing the results in the paper, do not hesitate to contact the authors.
 
-The scripts will download the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work if using multiple devices (in those cases, just run the command with single "--devices cpu" flag for data downloading first), or if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially).
+The scripts will start by **downloading** (after a prompt) the datasets to DATA_ROOT_PATH and the models will be saved to TRAINING_ROOT_PATH inside the directory MODEL_NAME. Note that the automatic data downloading will not work, if the data is no longer available at the url specified within the code (and Lung250M-4B dataset is only downloaded partially). LUMIR dataset might also not work due to google drive issues (adding a cookie file for gdown from your browser can help https://github.com/wkentaro/gdown/issues/43).
 
 For all the trainings which were part of the paper we chose the best epoch based on metrics computed on validation set (see [Evaluation](#evaluation)). Trainings are somewhat heavy but converge fast, and some configs might have unneccesarily large number of epochs. E.g. Lung250M-4B training converges already during the first epoch (5000 training pairs) and no improvement is seen after that.
 
@@ -67,6 +67,8 @@ After the first training has finnished, run the following fine-tuning training w
     torchrun --standalone --nnodes=1 --nproc-per-node=3 train.py --config scripts/configs/sitreg/lumir/cc_grad_1.0_very_deep_heavy_group_consistency_ndv.json --training-root TRAINING_ROOT_PATH --data-root DATA_ROOT_PATH --num-workers 4 --model-name MODEL_NAME --devices cuda:0 --devices cuda:1 --devices cuda:2
 
 The trainings are designed for 4 and 3 gpus respectively, and we recommend to use high-end GPU such as A100 or H100. The first training can easily be modified for smaller number of GPUs by reducing the batch size in the config and modifying the training command. The latter training is only implemented for multiples of 3 gpus (due to the group consistency loss), and is very memory hungry (would not fit easily on a single gpu).
+
+Automated downloading of LUMIR dataset might not work due to google drive issues but adding a cookie file for gdown from your browser can help (see https://github.com/wkentaro/gdown/issues/43).
 
 **NLST:**
 

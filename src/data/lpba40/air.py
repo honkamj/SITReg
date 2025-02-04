@@ -193,7 +193,7 @@ def inverse_transform_volume_by_air(
         volume.shape[-3:], voxel_size=target_voxel_size, dtype=volume.dtype, device=volume.device
     )
     volume_mapping = samplable_volume(
-        volume,
+        volume[None],
         coordinate_system=target_coordinate_system,
         sampler=sampler,
     )
@@ -208,5 +208,5 @@ def inverse_transform_volume_by_air(
             @ source_coordinate_system.to_voxel_coordinates
         )
         .sample_to(source_coordinate_system)
-        .generate_values()
+        .generate_values()[0]
     )

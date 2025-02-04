@@ -27,6 +27,7 @@ dependencies:
   - absl-py
   - pip:
     - nibabel
+    - fasteners
     - antspyx
     - git+https://github.com/deepmind/surface-distance.git
     - git+https://github.com/honkamj/composable-mapping
