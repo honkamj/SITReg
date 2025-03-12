@@ -86,18 +86,25 @@ class _BaseGradientLoss(IRegularityLoss):
                         for dim in range(n_dims)
                     ]
                 ),
-                limit_direction=LimitDirection.left(),
-                sampler=LinearInterpolator(mask_extrapolated_regions=False),
+                sampler=LinearInterpolator(
+                    limit_direction=LimitDirection.left(),
+                    mask_extrapolated_regions=False,
+                ),
             ).generate_values()
             if not self._regularize_flow:
                 constant_dim_substraction = zeros(
                     n_dims, dtype=dim_gradients.dtype, device=dim_gradients.device
                 )
                 constant_dim_substraction[spatial_dim] = 1.0
-                constant_dim_substraction = constant_dim_substraction.view(-1, *(1,) * n_dims)
+                constant_dim_substraction = constant_dim_substraction.view(
+                    -1, *(1,) * n_dims
+                )
                 dim_gradients = dim_gradients - constant_dim_substraction
             loss = optional_add(
-                loss, dim_gradients.square().mean(dim=get_other_than_batch_dim(dim_gradients))
+                loss,
+                dim_gradients.square().mean(
+                    dim=get_other_than_batch_dim(dim_gradients)
+                ),
             )
         assert loss is not None
         return (params["weight"] * loss / n_dims).mean()

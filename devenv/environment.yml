@@ -30,7 +30,6 @@ dependencies:
     - fasteners
     - antspyx
     - git+https://github.com/deepmind/surface-distance.git
-    - git+https://github.com/honkamj/composable-mapping
+    - composable-mapping == 0.1.2
     - deformation-inversion-layer >= 1.1.2
-    - icon-registration
     - gdown

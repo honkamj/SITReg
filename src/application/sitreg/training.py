@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional, Sequence, TypeVar, cast
 from composable_mapping import (
     ComposableMapping,
     CoordinateSystem,
-    EnumeratedSamplingParameterCache,
+    sampling_cache,
     GridComposableMapping,
     ISampler,
     LinearInterpolator,
@@ -78,7 +78,6 @@ class SITRegTraining(BaseTrainingDefinition):
         self._regularity_loss_levels = list(set(self._multiscale_regularity_losses.keys()))
         self._regularize_with_affine = loss_config.get("regularize_with_affine", True)
         self._ignore_mask = application_config["training"].get("ignore_mask", False)
-        self._sampling_parameter_cache = EnumeratedSamplingParameterCache()
 
     def _handle_mask(self, mask: Tensor) -> Tensor:
         if self._ignore_mask:
@@ -86,7 +85,7 @@ class SITRegTraining(BaseTrainingDefinition):
         return mask
 
     def update_weights(self, batch: Any) -> Mapping[str, float]:
-        with self._sampling_parameter_cache:
+        with sampling_cache():
             loss, loss_dict = self._compute_losses(batch)
         self._optimizer.zero_grad(set_to_none=True)
         logger.debug("Starting backward pass")

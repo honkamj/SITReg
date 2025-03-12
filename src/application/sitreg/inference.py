@@ -4,7 +4,7 @@ from typing import Any, Mapping, Optional
 
 from composable_mapping import (
     DataFormat,
-    EnumeratedSamplingParameterCache,
+    sampling_cache,
     GridComposableMapping,
     LinearInterpolator,
     samplable_volume,
@@ -42,7 +42,6 @@ class SITRegCaseInference(BaseRegistrationCaseInferenceDefinition):
             application_config["inference"].get("resample_when_composing", True)
         )
         self._intermediate_mappings: list[list[Optional[tuple[Tensor, Tensor]]]] = []
-        self._sampling_parameter_cache = EnumeratedSamplingParameterCache()
 
     def _compute_mapping_pair(
         self,
@@ -61,7 +60,7 @@ class SITRegCaseInference(BaseRegistrationCaseInferenceDefinition):
         return mapping_pair, intermediate_mappings
 
     def infer(self, batch: Any) -> None:
-        with self._sampling_parameter_cache:
+        with sampling_cache():
             return super().infer(batch)
 
     def _infer(
