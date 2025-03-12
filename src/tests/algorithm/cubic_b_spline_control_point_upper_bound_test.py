@@ -9,14 +9,15 @@ from composable_mapping import (
     CubicSplineSampler,
     DataFormat,
     End,
-    sampling_cache,
     LimitDirection,
     LinearInterpolator,
     OriginalShape,
     SamplableVolume,
     Start,
+    clear_sampling_cache,
     estimate_spatial_jacobian_matrices,
     samplable_volume,
+    sampling_cache,
 )
 from torch import float64, stack, tensor
 from tqdm import tqdm  # type: ignore
@@ -126,6 +127,7 @@ class CubicSplineCoefficientsTests(TestCase):
                 lipschitz_constant = jacobians.abs().sum(dim=2).max().item()
                 if lipschitz_constant > max_lipschitz_constant:
                     max_lipschitz_constant = lipschitz_constant
+        clear_sampling_cache()
         return 1 / max_lipschitz_constant
 
     @lengthy
