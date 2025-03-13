@@ -7,14 +7,16 @@ from typing import Any, Mapping, Optional, Sequence, TypeVar, cast
 from composable_mapping import (
     ComposableMapping,
     CoordinateSystem,
-    sampling_cache,
     GridComposableMapping,
     ISampler,
     LinearInterpolator,
     mappable,
     samplable_volume,
+    sampling_cache,
 )
-from torch import Tensor, ones_like
+from torch import Tensor
+from torch import bool as torch_bool
+from torch import ones_like
 from torch.nn import Module
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Adam, Optimizer
@@ -81,8 +83,8 @@ class SITRegTraining(BaseTrainingDefinition):
 
     def _handle_mask(self, mask: Tensor) -> Tensor:
         if self._ignore_mask:
-            return ones_like(mask, device=self._devices[0])
-        return mask
+            return ones_like(mask, device=self._devices[0], dtype=torch_bool)
+        return mask.to(dtype=torch_bool)
 
     def update_weights(self, batch: Any) -> Mapping[str, float]:
         with sampling_cache():

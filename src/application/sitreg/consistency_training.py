@@ -9,10 +9,13 @@ from composable_mapping import (
     GridComposableMapping,
     Identity,
     LinearInterpolator,
+    NearestInterpolator,
     samplable_volume,
 )
 from numpy import interp
-from torch import Tensor, empty_like, inverse, ones
+from torch import Tensor
+from torch import bool as torch_bool
+from torch import empty_like, inverse, ones
 from torch.distributed import (
     broadcast,
     get_group_rank,
@@ -193,18 +196,30 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
             .contiguous()
         )
 
+        augmented_masks = [
+            (
+                self._image_as_mapping(mask.to(dtype=image_1.dtype), sampler=NearestInterpolator())
+                @ augmentation
+            )
+            .sample()
+            .generate_values()
+            .to(dtype=torch_bool)
+            for mask, augmentation in zip(masks, augmentations)
+        ]
+
         forward_ddfs = [
-            forward_ddf if rank == self._process_within_group_rank else empty_like(forward_ddf)
+            (forward_ddf if rank == self._process_within_group_rank else empty_like(forward_ddf))
             for rank in range(3)
         ]
         inverse_ddfs = [
-            inverse_ddf if rank == self._process_within_group_rank else empty_like(inverse_ddf)
+            (inverse_ddf if rank == self._process_within_group_rank else empty_like(inverse_ddf))
             for rank in range(3)
         ]
         handles = []
-        for within_group_index, (broadcasted_forward_ddf, broadcasted_inverse_ddf) in enumerate(
-            zip(forward_ddfs, inverse_ddfs)
-        ):
+        for within_group_index, (
+            broadcasted_forward_ddf,
+            broadcasted_inverse_ddf,
+        ) in enumerate(zip(forward_ddfs, inverse_ddfs)):
             handles.append(
                 broadcast(
                     broadcasted_forward_ddf,
@@ -232,9 +247,9 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
             inverse_ddf_2=inverse_ddfs[1],
             forward_ddf_3=forward_ddfs[2],
             inverse_ddf_3=inverse_ddfs[2],
-            mask_1=mask_1,
-            mask_2=mask_2,
-            mask_3=mask_3,
+            mask_1=augmented_masks[0],
+            mask_2=augmented_masks[1],
+            mask_3=augmented_masks[2],
             loss=loss,
             loss_dict=loss_dict,
         )
