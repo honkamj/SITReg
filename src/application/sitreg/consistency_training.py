@@ -181,13 +181,13 @@ class SITRegDistributedConsistencyTraining(SITRegTraining):
         loss_dict = average_tensor_loss_dict(tensor_loss_dict)
 
         forward_ddf = (
-            (pair_augmentation_1_mapping @ self._ddf_as_mapping(forward_ddf))
+            self._ddf_as_mapping(forward_ddf)
             .sample(data_format=DataFormat.voxel_displacements())
             .generate_values()
             .contiguous()
         )
         inverse_ddf = (
-            (pair_augmentation_2_mapping @ self._ddf_as_mapping(inverse_ddf))
+            self._ddf_as_mapping(inverse_ddf)
             .sample(data_format=DataFormat.voxel_displacements())
             .generate_values()
             .contiguous()
