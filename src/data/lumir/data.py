@@ -44,13 +44,13 @@ class LumirDataDownloader(BaseDataDownloader):
             join(data_folder, "labelsTr", "SanityCheckLabelsTr.zip"),
             quiet=False,
         )
-        # gdown.download(
-        #    "https://drive.google.com/uc?export=download&id=1b0hyH7ggjCysJG-VGvo38XVE8bFVRMxb",
-        #    join(data_folder, "LUMIR_dataset.json"),
-        #    quiet=False,
-        # )
+        gdown.download(
+            "https://drive.google.com/uc?export=download&id=1b0hyH7ggjCysJG-VGvo38XVE8bFVRMxb",
+            join(data_folder, "LUMIR_dataset.json"),
+            quiet=False,
+        )
         logger.info("Extracting LUMIR dataset...")
-        # unzip(join(data_folder, "LUMIR.zip"), extract_to_same_dir=True, remove_after=True)
+        unzip(join(data_folder, "LUMIR.zip"), extract_to_same_dir=True, remove_after=True)
         unzip(
             join(data_folder, "labelsTr", "SanityCheckLabelsTr.zip"),
             extract_to_same_dir=True,
