@@ -15,12 +15,8 @@ from application.interface import (
     ITrainingDefinition,
     TrainingDefinitionArgs,
 )
-from application.sitreg.consistency_training import (
-    SITRegDistributedConsistencyTraining,
-)
-from application.sitreg.inference import (
-    SITRegInference,
-)
+from application.sitreg.consistency_training import SITRegDistributedConsistencyTraining
+from application.sitreg.inference import SITRegInference
 from application.sitreg.training import (
     SITRegLandmarkTraining,
     SITRegSegmentationTraining,
@@ -98,7 +94,11 @@ def create_model(
         ),
         max_control_point_multiplier=model_config["max_control_point_multiplier"],
         activation_factory=activation_factory,
-        normalizer_factory=normalizer_factory,
+        normalizer_factory=(
+            normalizer_factory
+            if model_config.get("use_normalization_in_deformation_extraction", True)
+            else None
+        ),
     )
     logger.info(
         "Initiated SITReg model with %d parameters",

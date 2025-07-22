@@ -59,6 +59,7 @@
                     2
                 ],
                 "max_control_point_multiplier": 0.99,
+                "use_normalization_in_deformation_extraction": false,
                 "transformation_downsampling_factor": [1.0, 1.0, 1.0],
                 "predict_affine": false,
                 "activation": {
